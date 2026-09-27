@@ -398,10 +398,14 @@ number below and the reason the spread is large.
 | Peak per-unit RSS | 1.86 GB — and 1.84 GB of it is the Clang front end, not this tool |
 | Database size | 570.3 MB, 55 725 symbols, 910 451 edges |
 
-**Query latency**, over 200 sampled symbols: medians of 0.2–0.6 ms and payloads
-of half a kilobyte. The worst case — the single most-called symbol in the index
-— is reported separately and is honestly slow; `evaluation.md` §5 says by how
-much and why.
+**Query latency**, over 200 sampled symbols: medians of 0.22–0.64 ms and
+payloads of half a kilobyte, which is the number that matters — an agent asking
+about an ordinary symbol pays about half a millisecond and about 500 bytes. The
+worst case — the single most-called symbol in the index, where the answer
+carries an exact `COUNT(DISTINCT src)` — is reported separately and is honestly
+slow: 25 ms for `get_symbol`, 56 ms for `get_callers`, both measured six sweeps
+deep because the first figures published for them did not reproduce.
+`evaluation.md` §5 has the table.
 
 **Scaling** is the finding worth carrying forward, and it is not the finding an
 earlier draft of this report claimed. The speedup **saturates at about 2.15×**
@@ -455,9 +459,9 @@ Summarized here; [`limitations.md`](limitations.md) is the full account.
 
 ## 11. Git history
 
-Thirty-five commits, each a working checkpoint: the build passes and the tests
-that existed at that point pass. The order is the order the work actually
-happened, including the corrections.
+Every commit here is a working checkpoint: the build passes and the tests that
+existed at that point pass. The order is the order the work actually happened,
+including the corrections.
 
 ```
 011fc3a chore: project scaffolding and reference analysis
@@ -496,11 +500,15 @@ f9d29cb docs: add the final report
 798e40e docs: fix the commit count and the claims that drifted from it
 ```
 
-The list ends at `798e40e`. The thirty-fifth commit is the one that put this
-paragraph here, and it is not in the list for the obvious reason: a list of
-commits cannot contain the commit that writes it. The count above is thirty-five
-for the same reason, and it is the only number in this document that had to be
-written after it was known.
+The list ends at `798e40e`. The two commits after it corrected this section —
+the count, and then this paragraph — and they are not in the list for the
+obvious reason: a list of commits cannot contain the commit that writes it.
+
+An earlier draft said twenty-nine commits. That was true when it was drafted and
+false by the time it was committed, which is the same failure as every other
+number corrected in this document, and the reason the total is no longer stated
+here. A count that has to be rewritten every time it is checked is not a
+measurement; it is a trap this section kept walking into.
 
 The last nine are the ones worth reading, and they are two halves of one story.
 The first four of them fixed a feature that was **silently producing nothing** —
