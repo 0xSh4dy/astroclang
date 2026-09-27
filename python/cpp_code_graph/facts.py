@@ -160,7 +160,10 @@ def read_facts(fp: Iterator[str], source: str = "<stream>") -> TranslationUnit:
                     usr=rec["u"],
                     kind=rec.get("k", "unknown"),
                     name=rec.get("n", ""),
-                    qualified=rec.get("q", ""),
+                    # `q` is omitted when it equals `n`, which is the common
+                    # case in C.  Reading it as empty would leave every C
+                    # symbol without a qualified name.
+                    qualified=rec.get("q") or rec.get("n", ""),
                     signature=rec.get("s", ""),
                     type_text=rec.get("ty", ""),
                     stub=bool(rec.get("stub")),

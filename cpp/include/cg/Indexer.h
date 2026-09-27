@@ -134,6 +134,10 @@ private:
   static llvm::StringRef kindOf(const clang::Decl *D);
   std::string signatureOf(const clang::Decl *D) const;
   std::string typeTextOf(const clang::Decl *D) const;
+
+  /// The qualified name as a reader would write it, template arguments
+  /// included.
+  std::string qualifiedNameOf(const clang::NamedDecl *ND) const;
   std::string parentUSROf(const clang::Decl *D);
   std::string accessOf(const clang::Decl *D) const;
 

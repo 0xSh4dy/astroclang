@@ -128,6 +128,19 @@ bool introducesSymbol(const Decl *D) {
   return false;
 }
 
+/// True when `DC` is, or is nested inside, an anonymous namespace.
+///
+/// Anonymity is inherited: a function in `namespace { namespace inner { ... } }`
+/// has internal linkage just as much as one declared directly in the anonymous
+/// namespace, and the check has to walk out to find it.
+bool inAnonymousNamespace(const DeclContext *DC) {
+  for (; DC; DC = DC->getParent()) {
+    const auto *ND = dyn_cast<NamespaceDecl>(DC);
+    if (ND && ND->isAnonymousNamespace()) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -368,6 +381,13 @@ std::string Indexer::buildFlags(const Decl *D) const {
     Add("inline", FD->isInlineSpecified());
     Add("constexpr", FD->isConstexpr());
     Add("extern_c", FD->isExternC());
+    // A free function declared `static` - and anything in an anonymous
+    // namespace - has internal linkage.  Two translation units may each have
+    // their own `clamp` and they are not the same function; a reader deciding
+    // whether a change is local needs to know which of the two they are
+    // looking at.
+    Add("static", FD->getStorageClass() == SC_Static ||
+                      inAnonymousNamespace(FD->getDeclContext()));
     if (const auto *MD = dyn_cast<CXXMethodDecl>(D)) {
       Add("virtual", MD->isVirtual());
       Add("pure", MD->isPure());
@@ -449,23 +469,64 @@ std::string Indexer::signatureOf(const Decl *D) const {
   return Out;
 }
 
+std::string Indexer::qualifiedNameOf(const NamedDecl *ND) const {
+  // getQualifiedNameAsString() prints a specialization's name through
+  // printName(), which does not append its template arguments.  Members of a
+  // specialization get them anyway, because the arguments come from the
+  // nested-name-specifier the enclosing class prints - so `Box<int>::get` is
+  // right while `Box<int>` itself comes out as `Box`, and the primary
+  // template, `Box<int>` and `Box<double>` all become the same name.
+  //
+  // getNameForDiagnostic() is the printer that appends them, and it is the
+  // only one that does.
+  PrintingPolicy PP = Ctx.getPrintingPolicy();
+  PP.SuppressTagKeyword = true;
+  std::string S;
+  llvm::raw_string_ostream OS(S);
+  ND->getNameForDiagnostic(OS, PP, /*Qualified=*/true);
+  OS.flush();
+  return S;
+}
+
+/// True when a type as written tells a reader nothing about what it denotes.
+///
+/// `auto doubled(int) -> decltype(value)` has a return type of `int`, and the
+/// spelling is the one thing about it that is not informative: the question a
+/// reader brings to a return type is what values may come back, and
+/// `decltype(value)` answers it only if they can see the declaration of
+/// `value`.  `auto` alone is worse still.
+bool isUninformativeSpelling(llvm::StringRef Text) {
+  return Text == "auto" || Text.starts_with("decltype(") ||
+         Text.starts_with("__decltype(");
+}
+
 std::string Indexer::typeTextOf(const Decl *D) const {
   PrintingPolicy PP = Ctx.getPrintingPolicy();
   PP.SuppressTagKeyword = true;
   PP.Bool = true;
   PP.SuppressUnwrittenScope = true;
 
-  if (const auto *FD = dyn_cast<FunctionDecl>(D))
-    return FD->getReturnType().getAsString(PP);
-  if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
+  QualType T;
+  if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+    T = FD->getReturnType();
+  } else if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D)) {
     if (const auto *FD = dyn_cast<FunctionDecl>(FTD->getTemplatedDecl()))
-      return FD->getReturnType().getAsString(PP);
+      T = FD->getReturnType();
+  } else if (const auto *TD = dyn_cast<TypedefNameDecl>(D)) {
+    T = TD->getUnderlyingType();
+  } else if (const auto *VD = dyn_cast<ValueDecl>(D)) {
+    T = VD->getType();
   }
-  if (const auto *VD = dyn_cast<ValueDecl>(D))
-    return VD->getType().getAsString(PP);
-  if (const auto *TD = dyn_cast<TypedefNameDecl>(D))
-    return TD->getUnderlyingType().getAsString(PP);
-  return std::string();
+
+  if (T.isNull()) return std::string();
+
+  std::string Written = T.getAsString(PP);
+  if (!isUninformativeSpelling(Written)) return Written;
+
+  // The canonical type is fully desugared, so it is exact but verbose:
+  // `std::__cxx11::basic_string<char>` rather than `std::string`.  That is the
+  // right trade only here, where the alternative is a type that says nothing.
+  return T.getCanonicalType().getAsString(PP);
 }
 
 std::string Indexer::parentUSROf(const Decl *D) {
@@ -485,7 +546,7 @@ FactWriter::Symbol Indexer::buildSymbol(const Decl *D, const std::string &USR,
   S.Kind = kindOf(D);
   if (const auto *ND = dyn_cast<NamedDecl>(D)) {
     S.Name = ND->getNameAsString();
-    S.QualifiedName = ND->getQualifiedNameAsString();
+    S.QualifiedName = qualifiedNameOf(ND);
   }
   S.Signature = signatureOf(D);
   S.TypeText = typeTextOf(D);
