@@ -352,10 +352,26 @@ def _neighbours(query: Query, args: Dict[str, Any], direction: str,
          "caller_count" if direction == "in" else "callee_count",
          count=lambda: query.degree(usr, CALL_EDGES, direction, include_system))
     if not entries:
-        out["note"] = ("nothing in the index calls this"
-                       if direction == "in" else
-                       "this calls nothing the index records")
+        out["note"] = _empty_neighbour_note(out["kind"], direction)
     return out
+
+
+# A macro is the one kind where an empty answer means less than it looks like.
+# Macros are indexed as definitions, with a name and a location, and nothing
+# records their uses - so "no callers" and "no references" are true statements
+# about a table that was never populated for them.  An agent reading that as
+# "this macro is unused" would delete live code, so the answer says which it is.
+_MACRO_NOTE = (
+    "this is a macro: the index records where it is defined and not where it "
+    "is used, so an empty list here does not mean it is unused"
+)
+
+
+def _empty_neighbour_note(kind: str, direction: str) -> str:
+    if kind == "macro":
+        return _MACRO_NOTE
+    return ("nothing in the index calls this" if direction == "in"
+            else "this calls nothing the index records")
 
 
 def _get_callers(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -376,9 +392,11 @@ def _get_references(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     out["kind"] = query.symbol(usr, detail=False)["kind"]
     _cut(out, "references", entries, limit, "reference_count",
          count=lambda: query.degree(usr, REFERENCE_EDGES, "in", include_system))
-    out["note"] = ("uses of the symbol that are not calls: assignments, "
-                   "addresses taken, and calls made through a function "
-                   "pointer, whose target is only known at run time")
+    out["note"] = (
+        _MACRO_NOTE if out["kind"] == "macro" else
+        "uses of the symbol that are not calls: assignments, addresses taken, "
+        "and calls made through a function pointer, whose target is only "
+        "known at run time")
     return out
 
 

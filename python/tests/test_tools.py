@@ -179,6 +179,42 @@ class TestRelationships(ToolCase):
         self.assertTrue(out["more"])
 
 
+class TestAnEmptyAnswerSaysWhatItMeans(ToolCase):
+    def test_a_macro_with_no_references_says_it_is_not_tracked(self):
+        # An empty list is the same shape whether the index looked and found
+        # nothing or never looked.  For a macro it never looks, and an agent
+        # reading "no references" as "safe to delete" would remove live code.
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "mac.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "mac.cpp"), False)],
+            symbols=[sym("m:src/mac.cpp:4:WIDGET_MAX", "macro", "WIDGET_MAX",
+                         "WIDGET_MAX", file=0, line=4),
+                     sym("c:@F@never_called", "function", "never_called",
+                         "never_called", "()", file=0, line=9)],
+        ))
+        self.store.rebuild_symbols()
+        for tool in ("get_references", "get_callers"):
+            out = self.call(tool, symbol="WIDGET_MAX")
+            self.assertEqual(out["references" if tool == "get_references"
+                                    else "callers"], [])
+            self.assertIn("macro", out["note"])
+            self.assertIn("not mean it is unused", out["note"])
+
+    def test_an_ordinary_symbol_keeps_the_ordinary_note(self):
+        # The special case is about macros, not about empty lists: a function
+        # nothing calls is genuinely uncalled, and can be deleted.
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "quiet.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "quiet.cpp"), False)],
+            symbols=[sym("c:@F@never_called", "function", "never_called",
+                         "never_called", "()", file=0, line=9)],
+        ))
+        self.store.rebuild_symbols()
+        out = self.call("get_callers", symbol="never_called")
+        self.assertEqual(out["callers"], [])
+        self.assertEqual(out["note"], "nothing in the index calls this")
+
+
 class TestACutListSaysSo(ToolCase):
     """The promise that a truncated answer carries its true length.
 
