@@ -392,6 +392,48 @@ class TestTypesAndAliases(Corpus):
                         detail["defined_at"])
         self.assertNotEqual(detail["location"], detail["defined_at"])
 
+    # A type written in source is nearly always sugar over the declaration it
+    # names, so these edges are reached by unwrapping that sugar.  The wrapper
+    # is the normal case, not a corner: `struct clib_point items[64]` reaches
+    # the record through an array of an elaborated type, and `Registry &`
+    # through a reference to one.
+
+    def test_a_field_of_struct_type_records_the_type_it_holds(self):
+        self.assertEqual(self.edge_targets("clib_buffer::items", "field_type"),
+                         {"clib_point"})
+
+    def test_a_field_of_alias_type_records_the_alias(self):
+        self.assertEqual(self.edge_targets("clib_buffer::used", "field_type"),
+                         {"clib_count"})
+
+    def test_a_typedef_typed_field_records_the_typedef(self):
+        # A callback is a typedef, so the edge names the type a reader wrote
+        # rather than the function-pointer type it expands to.
+        self.assertEqual(self.edge_targets("clib_buffer::visit", "field_type"),
+                         {"clib_visit_fn"})
+
+    def test_a_global_records_its_type(self):
+        self.assertEqual(self.edge_targets("clib_total", "var_type"),
+                         {"clib_count"})
+
+    def test_a_parameter_records_its_type(self):
+        self.assertEqual(self.edge_targets("clib_push", "param_type"),
+                         {"clib_buffer"})
+
+    def test_a_return_type_is_an_edge_and_not_only_a_string(self):
+        self.assertEqual(self.edge_targets("clib_size_of", "returns"),
+                         {"clib_count"})
+
+    def test_a_method_returning_a_reference_reaches_the_class(self):
+        self.assertEqual(
+            self.edge_targets("geo::Registry::instance", "returns"),
+            {"geo::Registry"})
+
+    def test_a_cxx_parameter_reaches_the_nested_class(self):
+        self.assertEqual(
+            self.edge_targets("geo::Registry::operator+=", "param_type"),
+            {"geo::Registry::Entry"})
+
 
 class TestC(Corpus):
     def test_struct_tags_and_typedefs(self):

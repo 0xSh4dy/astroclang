@@ -177,6 +177,31 @@ named declarations at the bottom, and emits one edge per named type reached.
 Depth is bounded (`--max-type-depth`, default 4) and visited types are tracked,
 so a recursive type does not loop.
 
+Two decisions in that walk are worth stating, because both are places where the
+obvious implementation is quietly wrong.
+
+**A name the author wrote outranks what it expands to.** `getAs<T>` on a
+`QualType` desugars before it answers, so a question asked in the wrong order
+gets a true answer to a different question. A field declared `clib_visit_fn`
+holds a callback; the fact that the callback's signature mentions
+`struct clib_point *` does not make the field a `clib_point`. The typedef is
+therefore tested first and wins, and the typedef's own `aliases` edge is what
+carries a reader onward to the underlying type. The same rule covers `using`
+aliases, which reach the same node.
+
+**The cycle guard is keyed on the type node, not on its canonical form.** Those
+differ exactly where this walk does its work: a type written in source is
+usually sugar over the declaration it names, so `Base` arrives as an
+`ElaboratedType` whose canonical type is the `RecordType` it wraps. Keying the
+guard on the canonical form inserts that `RecordType` at entry, and the
+unwrapping step then arrives at the very same `RecordType` and is turned away
+as a cycle — so the named declaration is never reached and *no edge is
+emitted*. Every node in a sugar chain is a distinct object and every structural
+child is strictly smaller, so keying on the node itself terminates just as
+well. This bug is worth naming because of its shape: it produced no error, no
+warning, and no missing symbol — only a graph with the type edges missing,
+which every test that checked symbols rather than edges would have passed.
+
 ---
 
 ## 7. Containment
