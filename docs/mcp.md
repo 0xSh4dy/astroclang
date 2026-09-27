@@ -557,6 +557,21 @@ exposes is MCP Inspector, which starts it and lists the tools:
 npx @modelcontextprotocol/inspector astroclang mcp /path/to/project
 ```
 
+That opens a browser page; `--cli` runs one request and prints the reply, which
+is what a script or a terminal wants:
+
+```sh
+npx @modelcontextprotocol/inspector --cli astroclang mcp /path/to/project \
+  --method tools/list
+npx @modelcontextprotocol/inspector --cli astroclang mcp /path/to/project \
+  --method tools/call --tool-name get_index_status
+```
+
+Spell the server command as the console script and not `python -m astroclang.cli`:
+Inspector 2.8's `--cli` parser swallows `-m` (and `-c`) and ends up spawning a
+bare `python`, which then fails on the JavaScript it is fed on stdin. The
+console script has no such flag, and is shorter to write in a config anyway.
+
 A host that keeps a config file wants the same command written down:
 
 ```json
