@@ -42,8 +42,11 @@ bool AnalysisVisitor::TraverseLambdaExpr(LambdaExpr *E) {
   if (!E) return true;
   // A lambda is a closure object with its own call operator.  Attributing its
   // body to the enclosing function would report the wrong caller for every
-  // call made inside it.
-  const std::string &U = I.reference(E->getLambdaClass());
+  // call made inside it: the body runs when the closure is invoked, which may
+  // be in another function, another thread, or after the enclosing function
+  // has returned.  The closure class is implicit, so this has to go through
+  // referenceSynthesized() rather than reference().
+  const std::string &U = I.referenceSynthesized(E->getLambdaClass());
   if (U.empty()) return RecursiveASTVisitor::TraverseLambdaExpr(E);
 
   std::string Saved;

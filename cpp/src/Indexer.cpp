@@ -640,6 +640,11 @@ const std::string &Indexer::reference(const Decl *D) {
   return emitNode(D, false);
 }
 
+const std::string &Indexer::referenceSynthesized(const Decl *D) {
+  if (!D || isNoise(D) || isa<TranslationUnitDecl>(D)) return kEmpty;
+  return emitNode(D, false);
+}
+
 // ---------------------------------------------------------------------------
 // Edges
 // ---------------------------------------------------------------------------

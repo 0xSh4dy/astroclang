@@ -64,6 +64,17 @@ public:
   /// `callers(std::vector<int>::resize)` answerable without indexing libstdc++.
   const std::string &reference(const clang::Decl *D);
 
+  /// Like reference(), but for compiler-synthesized declarations that carry
+  /// user-written code - a lambda's closure class, above all.
+  ///
+  /// reference() drops implicit declarations, which is right for the copy
+  /// constructors and conversion operators Clang invents by the thousand.  A
+  /// lambda body is not one of those: it is code the programmer wrote, and it
+  /// usually runs somewhere else entirely, long after the function that
+  /// created the closure has returned.  Attributing its calls to that function
+  /// would report a dependency that does not exist at the point claimed.
+  const std::string &referenceSynthesized(const clang::Decl *D);
+
   /// True when `D` should become a node of its own.
   bool isIndexableDecl(const clang::Decl *D) const;
 
