@@ -44,7 +44,8 @@ cpp-code-graph mcp   /path/to/project
                  coding agents
 ```
 
-Five layers, and the boundaries between them are the design.
+The boundaries between those stages are the design, and each one is there for a
+reason worth being able to state.
 
 **`cg-index` is a process, not a library.** It is given one translation unit
 and the compiler arguments for it, and writes JSON Lines to stdout. It never
@@ -454,7 +455,7 @@ Summarized here; [`limitations.md`](limitations.md) is the full account.
 
 ## 11. Git history
 
-Twenty-nine commits, each a working checkpoint: the build passes and the tests
+Thirty-three commits, each a working checkpoint: the build passes and the tests
 that existed at that point pass. The order is the order the work actually
 happened, including the corrections.
 
@@ -488,14 +489,27 @@ c014bff docs: describe the architecture, the model, the interface and the cost
 1d1d167 fix(query): make impact analysis reach beyond calls
 e422969 fix(tools): say that a macro's empty answer means "not tracked"
 87f14ee docs: show the third caller get_callers returns
+664e2bc docs: add a top-level README
+ccda648 docs(eval): re-run the evaluation after the type-edge fix
+25129b7 docs: correct the scaling and cache claims that quoted it
+f9d29cb docs: add the final report
 ```
 
-The last five are the ones worth reading. Four fixed a feature that was
-**silently producing nothing** — type edges absent from the graph, an impact
-bucket that was always empty, a count that under-reported exactly when it was
-cut, an empty list that meant "unchecked". The fifth is the same failure in
-documentation: `get_callers` was shown returning two callers where the index had
-three, and a reader would have had no way to tell.
+The last nine are the ones worth reading, and they are two halves of one story.
+The first four of them fixed a feature that was **silently producing nothing** —
+type edges absent from the graph, an impact bucket that was always empty, a
+count that under-reported exactly when it was cut, an empty list that meant
+"unchecked". The fifth is the same failure in documentation: `get_callers` was
+shown returning two callers where the index had three, and a reader would have
+had no way to tell.
+
+Then, having found four of those, the evaluation itself had to be re-run — and
+it turned out to have the same disease. A speedup of 3.10×, a query that "went
+from 53 ms to 0.02 ms", a worst case of 143 ms: all three were asserted rather
+than measured, all three appeared in more than one document, and none of them
+survives being measured properly. `ccda648` replaces them with the numbers the
+scripts actually produce, including the ones that contradict the story this
+project had been telling about its own scaling.
 
 None of them raised an error, failed a test, or looked wrong in an answer: a
 graph with no `field_type` edges reads exactly like a project with no fields,

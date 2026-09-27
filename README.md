@@ -41,7 +41,7 @@ Full usage, and what the tool knows and does not, is in
 | Document | What it covers |
 | --- | --- |
 | [`docs/reference-analysis.md`](docs/reference-analysis.md) | the reference implementation this was designed against, and what was adopted or rejected |
-| [`docs/architecture.md`](docs/architecture.md) | the five layers, and why each boundary is where it is |
+| [`docs/architecture.md`](docs/architecture.md) | the layers, and why each boundary is where it is |
 | [`docs/clang-usage.md`](docs/clang-usage.md) | exactly which Clang facilities are used, and the alternatives that were not |
 | [`docs/semantic-model.md`](docs/semantic-model.md) | every node and edge type |
 | [`docs/mcp.md`](docs/mcp.md) | every MCP tool, its arguments, and real example output |
