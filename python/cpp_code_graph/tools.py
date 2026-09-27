@@ -30,7 +30,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from . import changes as changes_mod
 from . import git as git_mod
 from .discovery import language_of
-from .query import CALLABLE_KINDS, Query
+from .query import (CALLABLE_KINDS, CALL_EDGES, DEPENDENCY_EDGES,
+                    REFERENCE_EDGES, Query)
 
 # Kinds that read as a class to someone asking for one.
 TYPE_KINDS = ("class", "struct", "union", "enum")
@@ -110,11 +111,25 @@ def _flag(args: Dict[str, Any], key: str, default: bool = False) -> bool:
 
 
 def _cut(out: Dict[str, Any], key: str, entries: Sequence[Any], limit: int,
-         count_key: Optional[str] = None) -> None:
-    """Store a list, and the number it was cut from when it was cut."""
+         count_key: Optional[str] = None,
+         count: Optional[Callable[[], int]] = None) -> None:
+    """Store a list, and the number it was cut from when it was cut.
+
+    Two ways to call this, and getting them the wrong way round is silent.
+
+    A caller holding a *complete* list passes it and nothing else: the length is
+    the answer, and `len(entries) > limit` is a true statement about the world.
+
+    A caller holding a *page* must fetch one more than it intends to show, and
+    pass `count` for the exact total.  Fetching `limit` and comparing against
+    `limit` can never detect a cut, because a query with `LIMIT n` cannot
+    return n+1 rows - so the answer is silently presented as complete when it
+    is not.  `count` is asked for only when the page was in fact full, so an
+    ordinary answer does not pay for a number it will not report.
+    """
     out[key] = list(entries[:limit])
     if len(entries) > limit:
-        out[count_key or f"{key}_count"] = len(entries)
+        out[count_key or f"{key}_count"] = count() if count else len(entries)
 
 
 def _schema(properties: Dict[str, Any], required: Sequence[str] = ()
@@ -320,13 +335,16 @@ def _neighbours(query: Query, args: Dict[str, Any], direction: str,
     usr = _one(query, args)
     limit = _int(args, "limit", DEFAULT_LIST, 1, MAX_LIST)
     include_system = _flag(args, "include_system")
-    entries = (query.callers(usr, limit=limit, include_system=include_system)
+    # One more than asked for, so that a full page can be told from a page that
+    # exactly fitted; the exact total is then one indexed query.
+    entries = (query.callers(usr, limit=limit + 1, include_system=include_system)
                if direction == "in" else
-               query.callees(usr, limit=limit, include_system=include_system))
+               query.callees(usr, limit=limit + 1, include_system=include_system))
     out = _target(query, usr)
     out["kind"] = query.symbol(usr, detail=False)["kind"]
     _cut(out, key, entries, limit,
-         "caller_count" if direction == "in" else "callee_count")
+         "caller_count" if direction == "in" else "callee_count",
+         count=lambda: query.degree(usr, CALL_EDGES, direction, include_system))
     if not entries:
         out["note"] = ("nothing in the index calls this"
                        if direction == "in" else
@@ -346,11 +364,12 @@ def _get_references(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     usr = _one(query, args)
     limit = _int(args, "limit", DEFAULT_LIST, 1, MAX_LIST)
     include_system = _flag(args, "include_system")
-    entries = query.references_to(usr, limit=limit,
+    entries = query.references_to(usr, limit=limit + 1,
                                   include_system=include_system)
     out = _target(query, usr)
     out["kind"] = query.symbol(usr, detail=False)["kind"]
-    _cut(out, "references", entries, limit, "reference_count")
+    _cut(out, "references", entries, limit, "reference_count",
+         count=lambda: query.degree(usr, REFERENCE_EDGES, "in", include_system))
     out["note"] = ("uses of the symbol that are not calls: assignments, "
                    "addresses taken, and calls made through a function "
                    "pointer, whose target is only known at run time")
@@ -373,14 +392,24 @@ def _get_symbol_dependencies(query: Query, args: Dict[str, Any]
                              ) -> Dict[str, Any]:
     usr = _one(query, args)
     limit = _int(args, "limit", DEFAULT_LIST, 1, MAX_LIST)
-    grouped = query.symbol_dependencies(usr, limit=limit)
     out = _target(query, usr)
     out["kind"] = query.symbol(usr, detail=False)["kind"]
-    total = 0
-    for kind, entries in grouped.items():
-        total += len(entries)
-        _cut(out, kind, entries, limit)
-    out["dependency_count"] = total
+    # Asked for one kind at a time.  The single grouped query this replaces
+    # applied its limit across every group at once, so a symbol with sixty
+    # parameter types and no calls would spend the whole budget on the types
+    # and report nothing else - and either way the answer could not say that
+    # anything had been left out, because the cut was invisible from here.
+    grouped = 0
+    for kind in DEPENDENCY_EDGES:
+        entries = query.outgoing(usr, (kind,), limit=limit + 1)
+        if not entries:
+            continue
+        grouped += 1
+        _cut(out, kind, entries, limit,
+             count=lambda k=kind: query.degree(usr, (k,), "out"))
+    out["dependency_count"] = sum(
+        len(v) for k, v in out.items()
+        if k in DEPENDENCY_EDGES and isinstance(v, list))
     if not grouped:
         out["note"] = "the index records no outgoing relationships"
     return out
@@ -450,7 +479,8 @@ def _get_file_symbols(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
         raise _unknown_file(path)
     entries = query.file_symbols(path, kind=kind, limit=limit + 1)
     out: Dict[str, Any] = {"file": query.rel(path) if "/" in path else path}
-    _cut(out, "symbols", entries, limit, "symbol_count")
+    _cut(out, "symbols", entries, limit, "symbol_count",
+         count=lambda: query.count_file_symbols(path, kind))
     if kind:
         out["kind"] = kind
     if not entries:

@@ -11,10 +11,11 @@ import json
 import unittest
 
 from cpp_code_graph import indexer, tools
+from cpp_code_graph.facts import FileFact, TranslationUnit
 from cpp_code_graph.tools import ToolError
 
 from tests.test_changes import RepoCase
-from tests.test_query import Fixture
+from tests.test_query import Fixture, edge, sym
 from tests.test_semantics import Corpus
 
 try:
@@ -175,6 +176,73 @@ class TestRelationships(ToolCase):
         out = self.call("search_symbols", query="allocate", limit=2)
         self.assertEqual(len(out["matches"]), 2)
         self.assertTrue(out["more"])
+
+
+class TestACutListSaysSo(ToolCase):
+    """The promise that a truncated answer carries its true length.
+
+    This is the one place where the code was quietly wrong rather than merely
+    incomplete, and it was wrong in a way no test could see: a page fetched
+    with `LIMIT n` can never hold n+1 rows, so a handler comparing the result
+    against the limit concludes "not truncated" every time.  The fix is to
+    fetch one extra and count the rest exactly; these tests hold that down, for
+    each tool that pages a list.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A symbol with more callers than any limit used below.  Twelve
+        # distinct functions call `mem::Helper::grow`, which the fixture
+        # otherwise has called exactly once.
+        target = "c:@N@mem@S@Helper@F@grow#l#"
+        callers = [sym(f"c:@F@caller{i}", "function", f"caller{i}",
+                       f"caller{i}", "()", file=0, line=20 + i)
+                   for i in range(12)]
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "many.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "many.cpp"), False)],
+            symbols=callers,
+            edges=[edge("calls", c.usr, target, file=0, line=20 + i)
+                   for i, c in enumerate(callers)],
+        ))
+        self.store.rebuild_symbols()
+
+    def test_callers_are_cut_and_the_answer_carries_the_true_total(self):
+        out = self.call("get_callers", symbol="mem::Helper::grow", limit=3)
+        self.assertEqual(len(out["callers"]), 3)
+        # Thirteen: the twelve above plus the fixture's own Fast::allocate.
+        self.assertEqual(out["caller_count"], 13)
+
+    def test_an_uncut_list_carries_no_count_to_misread(self):
+        out = self.call("get_callers", symbol="mem::Helper::grow", limit=50)
+        self.assertEqual(len(out["callers"]), 13)
+        self.assertNotIn("caller_count", out)
+
+    def test_callees_carry_their_total_too(self):
+        hub = "c:@F@hub"
+        callees = [sym(f"c:@F@callee{i}", "function", f"callee{i}",
+                       f"callee{i}", "()", file=0, line=60 + i)
+                   for i in range(9)]
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "hub.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "hub.cpp"), False)],
+            symbols=[sym(hub, "function", "hub", "hub", "()", file=0, line=50)]
+            + callees,
+            edges=[edge("calls", hub, c.usr, file=0, line=60 + i)
+                   for i, c in enumerate(callees)],
+        ))
+        self.store.rebuild_symbols()
+        out = self.call("get_callees", symbol="hub", limit=4)
+        self.assertEqual(len(out["callees"]), 4)
+        self.assertEqual(out["callee_count"], 9)
+
+    def test_a_file_lists_a_page_and_counts_the_whole(self):
+        # `symbol_count` used to be the page length, one more than asked for.
+        out = self.call("get_file_symbols", path="include/iface.h", limit=2)
+        self.assertEqual(len(out["symbols"]), 2)
+        self.assertGreater(out["symbol_count"], 3)
+        self.assertEqual(out["symbol_count"], self.q.count_file_symbols(
+            "include/iface.h"))
 
 
 class TestFiles(ToolCase):

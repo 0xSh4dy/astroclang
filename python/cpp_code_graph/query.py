@@ -464,7 +464,7 @@ class Query:
 
     def references_to(self, usr: str, limit: int = DEFAULT_CALLER_LIMIT,
                       include_system: bool = False) -> List[Dict[str, Any]]:
-        return self._edges(usr, ("references", "calls_indirect"), "in", limit,
+        return self._edges(usr, REFERENCE_EDGES, "in", limit,
                            include_system)
 
     def outgoing(self, usr: str, kinds: Sequence[str] = DEPENDENCY_EDGES,
@@ -699,6 +699,24 @@ class Query:
                      limit: int = 200) -> List[Dict[str, Any]]:
         return self.symbols_in_file(path, include_system=True, kind=kind,
                                     limit=limit)
+
+    def count_file_symbols(self, path: str, kind: Optional[str] = None) -> int:
+        """How many symbols a file holds, without listing them.
+
+        Needed because the list is paged - `limit + 1` says whether the page
+        was cut, and this says what the whole list was.  Counted with the same
+        predicate as `symbols_in_file`, so the two cannot disagree about which
+        symbols belong to the file.
+        """
+        file_id = self._file_id(path)
+        if file_id is None:
+            return 0
+        return self.conn.execute(
+            f"WITH spans AS ({self._SPANS}) SELECT COUNT(*) FROM spans WHERE"
+            " (file_id = :fid OR def_file_id = :fid)"
+            " AND (:kind IS NULL OR kind = :kind)",
+            {"fid": file_id, "kind": kind},
+        ).fetchone()[0]
 
     # -- source --------------------------------------------------------------
 
