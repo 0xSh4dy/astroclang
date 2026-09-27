@@ -134,9 +134,45 @@ A first measurement ran the same tree serially and then in parallel, reported
 **3.10×** (369 s then 119 s), and was an artefact: the serial run went first
 and read every file from a cold page cache, the parallel run went second and
 found them all in memory. Alternating the order and repeating it gives the
-real picture, which is not a single number at all:
+real picture, which is not a single number at all.
 
-<!--SCALING-->
+That correction is the reason this section now says what it does not yet know.
+The sweep that would produce the table is written and works —
+[`scripts/scaling.py`](../scripts/scaling.py), which indexes the tree from
+scratch at each worker count, alternating the order between passes so that
+neither configuration systematically gets the warm cache:
+
+```sh
+scripts/scaling.py --root /usr/src/googletest --jobs 1 2 4 8 --repeat 2
+```
+
+It measures two different things about memory, because they disagree about
+where the limit is. Wall time keeps improving with more workers until the cores
+run out. Memory does not: `evaluate.py` reports `getrusage(RUSAGE_CHILDREN)`,
+which on Linux is the **largest single child**, while the quantity that decides
+how wide a run can safely go is the **sum across concurrent children**. One
+unity build needing 1.84 GB and eight of them needing 14.7 GB are the same
+number under the first measure and very different facts about the machine. The
+sweep samples `/proc` while the run proceeds to get the second.
+
+**The sweep has not been run to completion on this subject**, and the table is
+absent rather than estimated. The machine is the one described in §1 — a
+laptop with a desktop session, 15 GB of RAM of which roughly 3 GB is free at
+the time of writing. At the measured worst case of 1.84 GB per translation
+unit, only the single-worker configuration fits, and one point is not a curve.
+The script refuses any width it does not believe fits (`MEMORY_HEADROOM` = 75%
+of `MemAvailable`, and `--per-worker-mb` to lower the estimate for a tree
+without a unity build), so running it here would report a refusal rather than a
+measurement. That refusal is the finding: **on this workload the binding
+constraint is RAM, not cores**, which is why `--jobs` defaults to
+`os.cpu_count()` and is worth setting by hand on a machine with fewer free
+gigabytes than cores.
+
+What is not in doubt is the shape, and it is the part that matters for using
+the tool: the front end dominates, the extractor adds ~1.4% over it (§2), and
+the cost is per translation unit and bounded by memory. The open question is
+the exact speedup curve, and it needs a machine that is not also running a
+desktop to answer.
 
 ---
 
