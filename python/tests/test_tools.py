@@ -385,6 +385,27 @@ class TestTheRestOfTheCutLists(ToolCase):
         self.assertEqual(len(out["diagnostics"]), 3)
         self.assertEqual(out["count"], 7)
 
+    def test_a_type_cut_on_its_type_edges_says_so(self):
+        # A class has no callers, so `direct` is filled from the declarations
+        # that name its type.  That lookup was the last one feeding `direct`
+        # that still fetched exactly `limit`, which is the shape that cannot
+        # tell a complete list from a cut one.
+        target = "c:@S@Wide"
+        namers = [sym(f"c:@F@takes{i}", "function", f"takes{i}", f"takes{i}",
+                      "(Wide &)", file=0, line=60 + i) for i in range(8)]
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "wide.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "wide.cpp"), False)],
+            symbols=[sym(target, "class", "Wide", "Wide", file=0, line=59)]
+                    + namers,
+            edges=[edge("param_type", c.usr, target, file=0, line=60 + i)
+                   for i, c in enumerate(namers)],
+        ))
+        self.store.rebuild_symbols()
+        out = self.call("get_impact_analysis", symbol="Wide", limit=3)
+        self.assertEqual(len(out["direct"]), 3)
+        self.assertIn("direct", out["truncated"])
+
     def test_impact_names_the_bucket_the_limit_stopped(self):
         # Nine callers - eight here plus the fixture's own - asked for three.
         out = self.call("get_impact_analysis", symbol="mem::Helper::grow",

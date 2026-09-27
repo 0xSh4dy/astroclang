@@ -1047,7 +1047,9 @@ class Query:
         # enum and typedef in the project while its documentation claimed
         # otherwise.
         for kind, reason in TYPE_EDGES:
-            for entry in self._edges(usr, (kind,), "in", limit, with_usr=True):
+            naming = self._edges(usr, (kind,), "in", budget, with_usr=True)
+            took(naming, "direct")
+            for entry in naming:
                 add(direct, entry, reason)
                 seed(entry)
 
