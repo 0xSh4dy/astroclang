@@ -237,6 +237,34 @@ class TestACutListSaysSo(ToolCase):
         self.assertEqual(len(out["callees"]), 4)
         self.assertEqual(out["callee_count"], 9)
 
+    def test_a_cut_dependency_group_still_counts_the_whole(self):
+        # `dependency_count` summed the pages, so a cut shrank it by exactly
+        # what had been withheld: the one number a reader would trust most was
+        # the one number that lied.  A cut group carries its true total, and
+        # the sum has to use it.
+        #
+        # Two groups, so the sum has something to add up: eight calls, cut to
+        # three, and one field type that is not cut.
+        hub = "c:@F@twelve"
+        callees = [sym(f"c:@F@leaf{i}", "function", f"leaf{i}", f"leaf{i}",
+                       "()", file=0, line=80 + i) for i in range(8)]
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "twelve.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "twelve.cpp"), False)],
+            symbols=[sym(hub, "function", "twelve", "twelve", "()",
+                         file=0, line=70)] + callees,
+            edges=[edge("calls", hub, c.usr, file=0, line=80 + i)
+                   for i, c in enumerate(callees)]
+            + [edge("returns", hub, "c:@N@mem@S@Allocator", file=0, line=70)],
+        ))
+        self.store.rebuild_symbols()
+
+        out = self.call("get_symbol_dependencies", symbol="twelve", limit=3)
+        self.assertEqual(len(out["calls"]), 3)
+        self.assertEqual(out["calls_count"], 8)
+        # Eight, not the three on the page, plus the one return type.
+        self.assertEqual(out["dependency_count"], 9)
+
     def test_a_file_lists_a_page_and_counts_the_whole(self):
         # `symbol_count` used to be the page length, one more than asked for.
         out = self.call("get_file_symbols", path="include/iface.h", limit=2)

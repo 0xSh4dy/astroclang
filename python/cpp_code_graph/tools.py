@@ -413,8 +413,12 @@ def _get_symbol_dependencies(query: Query, args: Dict[str, Any]
         grouped += 1
         _cut(out, kind, entries, limit,
              count=lambda k=kind: query.degree(usr, (k,), "out"))
+    # Summing the lists would under-report by exactly the amount that was cut,
+    # and it would do so silently in the one answer where the reader most needs
+    # the real number.  A group that was cut carries its exact total under
+    # `<kind>_count`, so prefer that wherever it exists.
     out["dependency_count"] = sum(
-        len(v) for k, v in out.items()
+        out.get(f"{k}_count", len(v)) for k, v in out.items()
         if k in DEPENDENCY_EDGES and isinstance(v, list))
     if not grouped:
         out["note"] = "the index records no outgoing relationships"

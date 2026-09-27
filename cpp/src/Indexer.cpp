@@ -765,12 +765,31 @@ void Indexer::addTypeEdgesImpl(const std::string &SrcUSR, QualType T,
                                unsigned Depth, std::unordered_set<const void *> &Seen) {
   if (T.isNull() || Depth > Opts.MaxTypeDepth) return;
 
-  // Strip the sugar that carries no referent of its own. Elaborated types
-  // (`struct Foo`), attributed types and parentheses all describe the same
-  // entity as what they wrap.
-  QualType Canonical = T.getCanonicalType();
-  if (Canonical.isNull()) return;
-  if (!Seen.insert(Canonical.getTypePtr()).second) return;  // cycle guard
+  // The cycle guard is keyed on the node being visited, not on its canonical
+  // form.  Those differ exactly where this function does its work: a type
+  // written in source is usually sugar over the declaration it names, so
+  // `Base` reaches here as an ElaboratedType whose *canonical* type is the
+  // RecordType it wraps.  Keying the guard on the canonical form inserts that
+  // RecordType up front, and the unwrapping step below then arrives at the
+  // very same RecordType and is turned away as a cycle - so the named
+  // declaration is never reached and no edge is recorded.  Every node in a
+  // sugar chain is a distinct object and every structural child is strictly
+  // smaller, so keying on the node itself terminates just as well.
+  if (!Seen.insert(T.getTypePtr()).second) return;
+
+  // A name the author wrote answers "what type is this" better than whatever
+  // it expands to: a field of type `clib_visit_fn` holds a callback, and
+  // calling it a `clib_point` because the callback's signature happens to
+  // mention one would be plainly wrong.  The typedef's own `aliases` edge
+  // leads onward to the underlying type for a reader that wants it.
+  //
+  // This has to come before the sugar below, because `getAs` desugars: a
+  // typedef of a pointer would otherwise be unwrapped as a pointer and its
+  // name would never be seen.
+  if (const auto *TT = T->getAs<TypedefType>()) {
+    if (const Decl *D = TT->getDecl()) addEdge(Kind, SrcUSR, reference(D), Loc);
+    return;
+  }
 
   // Pointer/reference/array/cv all still refer to the element type; a graph
   // user asking "what type does this field hold" wants the pointee.
@@ -822,13 +841,10 @@ void Indexer::addTypeEdgesImpl(const std::string &SrcUSR, QualType T,
     if (const Decl *D = ET->getDecl()) addEdge(Kind, SrcUSR, reference(D), Loc);
     return;
   }
-  // A typedef is a node in its own right; the storage layer links it onward to
-  // its underlying type via the `aliases` edge, so the chain is preserved
-  // without flattening it here.
-  if (const auto *TT = T->getAs<TypedefType>()) {
-    if (const Decl *D = TT->getDecl()) addEdge(Kind, SrcUSR, reference(D), Loc);
-    return;
-  }
+  // No TypedefType case here: a typedef is handled first thing above, because
+  // `getAs` desugars and every branch between would otherwise claim it.  The
+  // storage layer links a typedef onward to its underlying type via the
+  // `aliases` edge, so the chain is preserved without flattening it here.
   if (const auto *TST = T->getAs<TemplateSpecializationType>()) {
     if (const TemplateDecl *TD = TST->getTemplateName().getAsTemplateDecl()) {
       addEdge(Kind, SrcUSR, reference(TD), Loc);
