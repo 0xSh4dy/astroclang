@@ -62,7 +62,8 @@ class RepoCase(unittest.TestCase):
         path = self.root / rel
         return self.write(rel, path.read_text().replace(old, new))
 
-    def build_index(self):
+    def write_compdb(self) -> Path:
+        """A compilation database for the corpus, one entry per source file."""
         commands = []
         for path in sorted((self.root / "src").iterdir()):
             if path.suffix not in (".c", ".cpp"):
@@ -75,7 +76,10 @@ class RepoCase(unittest.TestCase):
                 "command": " ".join([*flags, "-fsyntax-only", "-Iinclude",
                                      "src/" + path.name]),
             })
-        compdb = self.write("compile_commands.json", json.dumps(commands))
+        return self.write("compile_commands.json", json.dumps(commands))
+
+    def build_index(self):
+        compdb = self.write_compdb()
         store = Store(Path(self._tmp.name) / "index.db",
                       project_root=self.root)
         index_project(self.root, store, extractor=EXTRACTOR, compdb=compdb)

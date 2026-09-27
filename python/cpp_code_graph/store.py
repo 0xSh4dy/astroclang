@@ -24,6 +24,29 @@ def default_db_path(project_root: Path) -> Path:
     return Path(project_root) / DEFAULT_INDEX_DIR / DB_NAME
 
 
+def read_meta(path: Path, key: str) -> Optional[str]:
+    """One value out of an index, without opening it for use.
+
+    Read-only and silent about failure: the callers ask before they know
+    whether there is an index there at all, and "no answer" is the same
+    answer as "no index" for what they are deciding.
+    """
+    if not Path(path).is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                           (key,)).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
 class Store:
     def __init__(self, path: Path, project_root: Optional[Path] = None):
         self.path = Path(path)
