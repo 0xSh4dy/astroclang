@@ -130,12 +130,13 @@ Start here when an answer looks empty or incomplete.
  "root": "/tmp/ccg-demo",
  "database": "/tmp/ccg-demo/.cpp-code-graph/index.db",
  "schema_version": "1",
- "database_bytes": 229376,
+ "database_bytes": 237568,
  "files": 85, "project_files": 6,
  "translation_units": 4,
  "symbols": 113, "symbols_in_project": 107,
- "edges": 230, "includes": 234,
+ "edges": 292, "includes": 234,
  "diagnostics": 0, "degraded_tus": 0, "failed_tus": 0,
+ "built_at": "2026-09-27T08:58:09+00:00",
  "compiler_arguments": {"compile_commands.json": 4},
  "accuracy": "exact"
 }
@@ -208,12 +209,20 @@ reading the header:
  "methods": [
   {"symbol": "geo::Tagged::Tagged", "signature": "(double, int)", "kind": "constructor",
    "location": "include/shapes.h:60", "defined_at": "src/shapes.cpp:27"},
+  {"symbol": "geo::Tagged::~Tagged", "signature": "()", "kind": "destructor",
+   "location": "include/shapes.h:61", "defined_at": "src/shapes.cpp:28"},
   {"symbol": "geo::Tagged::area", "signature": "() const", "kind": "method",
-   "location": "include/shapes.h:63", "defined_at": "src/shapes.cpp:31"}
+   "location": "include/shapes.h:63", "defined_at": "src/shapes.cpp:31"},
+  {"symbol": "geo::Tagged::label", "signature": "() const", "kind": "method",
+   "location": "include/shapes.h:64", "defined_at": "src/shapes.cpp:33"}
  ],
  "fields": [{"symbol": "geo::Tagged::tag_", "location": "include/shapes.h:67"}]
 }
 ```
+
+Every entry carries the fields its own kind has and no others: a base has
+`access`, a constructor has no signature worth reading past its parameters, and
+a field has no `defined_at`, because a field is only ever declared.
 
 ---
 
@@ -282,18 +291,47 @@ return types, field types, base classes, and what it calls. This is the "what
 would I have to look at to change this" query.
 
 ```json
-{"symbol": "app::measure_circle"}
+{"symbol": "geo::Registry::operator+="}
 ```
 ```json
 {
- "symbol": "app::measure_circle",
- "location": "src/usage.cpp:32",
- "parameters": [{"symbol": "geo::Circle", "location": "include/shapes.h:34"}],
- "returns": [{"symbol": "double"}],
- "calls": [{"symbol": "geo::Circle::area", "location": "include/shapes.h:39",
-            "call_site": "src/usage.cpp:32"}]
+ "symbol": "geo::Registry::operator+=",
+ "location": "include/shapes.h:112",
+ "defined_at": "src/shapes.cpp:51",
+ "kind": "method",
+ "calls": [
+  {"symbol": "geo::Registry::Entry::weight", "signature": "() const", "kind": "method",
+   "location": "include/shapes.h:104", "defined_at": "src/shapes.cpp:44",
+   "call_site": "src/shapes.cpp:52"}
+ ],
+ "references": [
+  {"symbol": "geo::Registry::count_", "kind": "field",
+   "location": "include/shapes.h:121", "call_site": "src/shapes.cpp:52"}
+ ],
+ "param_type": [
+  {"symbol": "geo::Registry::Entry", "kind": "class",
+   "location": "include/shapes.h:101", "call_site": "include/shapes.h:112"}
+ ],
+ "returns": [
+  {"symbol": "geo::Registry", "kind": "class",
+   "location": "include/shapes.h:98", "call_site": "include/shapes.h:112"}
+ ],
+ "dependency_count": 4
 }
 ```
+
+**The group names are edge kinds**, not hand-written categories — `calls`,
+`references`, `param_type`, `returns`, `field_type`, `var_type`, `aliases`,
+`inherits`, `overrides`, `specializes`, `instantiates`, `calls_indirect`. A
+group is present only when the symbol has an edge of that kind, so an absent
+`returns` means no return type was recorded, not that the key was renamed.
+`dependency_count` is the exact total across every group, so a symbol whose
+dependencies were cut by `limit` still reports how many there are.
+
+A type edge carries `call_site` pointing at the *declaration* that named the
+type, which is why the entries above cite `include/shapes.h` rather than the
+source: the parameter was written in the header, and that is where a reader
+would go to change it.
 
 ---
 
