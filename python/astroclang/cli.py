@@ -29,7 +29,7 @@ from .mcp_server import open_index, serve_stdio
 from .query import Query
 from .store import DEFAULT_INDEX_DIR, Store, default_db_path, read_meta
 
-PROGRAM = "cpp-code-graph"
+PROGRAM = "astroclang"
 
 OK = 0
 FAILED = 1
@@ -274,7 +274,7 @@ def _parser() -> argparse.ArgumentParser:
     index.add_argument("--jobs", type=int, default=0, metavar="N",
                        help="translation units to analyse at once")
     index.add_argument("--extractor", metavar="PATH", default=None,
-                       help="path to the cg-index extractor")
+                       help="path to the astroclang-index extractor")
     index.add_argument("--timeout", type=float, default=300.0, metavar="SECONDS",
                        help="per-translation-unit timeout")
     index.add_argument("--no-incremental", action="store_true",

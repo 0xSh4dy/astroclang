@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cpp-code-graph"
+name = "astroclang"
 version = "0.1.0"
 description = "A semantic index of a C/C++ codebase, served to coding agents over MCP"
 readme = "README.md"
@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 # No runtime dependencies.  The index is SQLite and the MCP server speaks
 # JSON-RPC directly, so the tool installs and runs wherever Python and the
-# extractor binary do.  Clang is reached through `cg-index`, a compiled
+# extractor binary do.  Clang is reached through `astroclang-index`, a compiled
 # binary, not through a Python binding.
 dependencies = []
 
@@ -20,7 +20,7 @@ dependencies = []
 test = ["mcp>=1.0"]
 
 [project.scripts]
-cpp-code-graph = "cpp_code_graph.cli:run"
+astroclang = "astroclang.cli:run"
 
 [tool.setuptools]
-packages = ["cpp_code_graph"]
+packages = ["astroclang"]

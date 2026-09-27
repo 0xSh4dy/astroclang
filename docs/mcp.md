@@ -1,12 +1,12 @@
 # The MCP interface
 
-`cpp-code-graph mcp` serves the index to a coding agent over the Model Context
+`astroclang mcp` serves the index to a coding agent over the Model Context
 Protocol on stdio. This document is the reference for what it exposes.
 
 ```sh
-cpp-code-graph index /path/to/project     # build the index
-cpp-code-graph mcp /path/to/project       # serve it on stdio
-cpp-code-graph mcp --list-tools           # print the surface as JSON, serve nothing
+astroclang index /path/to/project     # build the index
+astroclang mcp /path/to/project       # serve it on stdio
+astroclang mcp --list-tools           # print the surface as JSON, serve nothing
 ```
 
 ---
@@ -132,7 +132,7 @@ Start here when an answer looks empty or incomplete.
 ```json
 {
  "root": "/tmp/ccg-demo",
- "database": "/tmp/ccg-demo/.cpp-code-graph/index.db",
+ "database": "/tmp/ccg-demo/.astroclang/index.db",
  "schema_version": "1",
  "database_bytes": 237568,
  "files": 85, "project_files": 6,
@@ -550,8 +550,8 @@ which is where the token argument for this tool comes from.
 ### Using it from a client
 
 ```json
-{"mcpServers": {"cpp-code-graph": {
-  "command": "cpp-code-graph",
+{"mcpServers": {"astroclang": {
+  "command": "astroclang",
   "args": ["mcp", "/path/to/project"]
 }}}
 ```

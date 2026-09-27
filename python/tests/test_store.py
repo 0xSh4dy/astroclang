@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cpp_code_graph.facts import (EdgeFact, FileFact, IncludeFact, SymbolFact,
+from astroclang.facts import (EdgeFact, FileFact, IncludeFact, SymbolFact,
                                   TranslationUnit)
-from cpp_code_graph.store import Store
+from astroclang.store import Store
 
 
 def tu(path, files, symbols=(), edges=(), includes=()):

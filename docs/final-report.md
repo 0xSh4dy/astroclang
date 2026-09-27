@@ -1,14 +1,14 @@
 # Final report
 
-`cpp-code-graph` is a semantic index of C and C++ projects, and an MCP server
+`astroclang` is a semantic index of C and C++ projects, and an MCP server
 that answers questions about one without making an agent read the source. This
 document is the account of what was built and what was learned building it.
 Every claim here is backed by a document that says more, and every number by a
 script that produced it.
 
 ```sh
-cpp-code-graph index /path/to/project
-cpp-code-graph mcp   /path/to/project
+astroclang index /path/to/project
+astroclang mcp   /path/to/project
 ```
 
 ---
@@ -21,7 +21,7 @@ cpp-code-graph mcp   /path/to/project
              compile_commands.json          discovery.py
                        |
                        v
-                  cg-index                 cpp/  (C++17, Clang LibTooling)
+                  astroclang-index                 cpp/  (C++17, Clang LibTooling)
                  one TU, one process
                        |
                   JSONL facts on stdout
@@ -47,7 +47,7 @@ cpp-code-graph mcp   /path/to/project
 The boundaries between those stages are the design, and each one is there for a
 reason worth being able to state.
 
-**`cg-index` is a process, not a library.** It is given one translation unit
+**`astroclang-index` is a process, not a library.** It is given one translation unit
 and the compiler arguments for it, and writes JSON Lines to stdout. It never
 opens a database and holds no state between translation units. Three things
 follow: a Clang front end that crashes on adversarial input costs one
@@ -122,7 +122,7 @@ implementation was copied.
 
 ## 3. How Clang is used
 
-`cg-index` drives **Clang LibTooling** — `clang::tooling::ClangTool` over a
+`astroclang-index` drives **Clang LibTooling** — `clang::tooling::ClangTool` over a
 `CompilationDatabase` — rather than clangd, and rather than shelling out to
 `clang -ast-dump`. The reasoning, in short:
 
@@ -218,7 +218,7 @@ More: [`semantic-model.md`](semantic-model.md).
 
 ## 5. Storage
 
-SQLite, two layers, one file per project at `.cpp-code-graph/index.db`.
+SQLite, two layers, one file per project at `.astroclang/index.db`.
 
 **Raw layer** — `raw_symbol`, `raw_edge`, `raw_include`, `raw_diag`, keyed by
 translation unit. Exactly what each unit reported, including its own report of

@@ -12,7 +12,7 @@ checkable it is stated so that it can be checked.
 
 ## 1. Analysis is per translation unit
 
-`cg-index` analyzes one translation unit at a time and reports what *that*
+`astroclang-index` analyzes one translation unit at a time and reports what *that*
 compilation saw. Nothing is merged at analysis time.
 
 **A declaration whose definition lives in another translation unit is a
@@ -50,7 +50,7 @@ a macro body is not attributed to anything.
 
 **Conditional compilation follows the configuration given.** With a
 `compile_commands.json`, that is the real configuration and the answer is
-exact. Without one, `cg-index` falls back to a permissive guess, and
+exact. Without one, `astroclang-index` falls back to a permissive guess, and
 `get_index_status` reports `accuracy: degraded` with the count of translation
 units analyzed that way — because an index that silently guessed is worse than
 one that says it guessed.

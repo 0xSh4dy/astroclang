@@ -15,20 +15,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cpp_code_graph import discovery, indexer
-from cpp_code_graph.discovery import plan_indexing, walk_sources
-from cpp_code_graph.indexer import IndexReport, index_project
-from cpp_code_graph.store import Store
+from astroclang import discovery, indexer
+from astroclang.discovery import plan_indexing, walk_sources
+from astroclang.indexer import IndexReport, index_project
+from astroclang.store import Store
 
 STUB = '''#!/usr/bin/env python3
-"""A stand-in for cg-index: emits a fact stream shaped like the real one."""
+"""A stand-in for astroclang-index: emits a fact stream shaped like the real one."""
 import json, os, sys
 
 path = sys.argv[-1]
 mode = os.environ.get("STUB_MODE", "ok")
 
 if mode == "crash":
-    sys.stderr.write("cg-index: could not find a compilation database\\n")
+    sys.stderr.write("astroclang-index: could not find a compilation database\\n")
     sys.exit(2)
 
 line = lambda r: sys.stdout.write(json.dumps(r) + "\\n")
@@ -324,11 +324,11 @@ class TestExtractorLocation(ProjectCase):
         self.assertEqual(indexer.find_extractor(str(self.stub)), self.stub)
 
     def test_environment_variable_is_used(self):
-        os.environ["CG_INDEX"] = str(self.stub)
+        os.environ["ASTROCLANG_INDEX"] = str(self.stub)
         try:
             self.assertEqual(indexer.find_extractor(), self.stub)
         finally:
-            os.environ.pop("CG_INDEX", None)
+            os.environ.pop("ASTROCLANG_INDEX", None)
 
 
 if __name__ == "__main__":

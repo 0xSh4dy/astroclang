@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes what `cpp-code-graph` is made of and why. It is the
+This document describes what `astroclang` is made of and why. It is the
 long-form companion to [`README.md`](../README.md), which is the short version
 for someone who just wants to run the tool.
 
@@ -40,7 +40,7 @@ to make that decision affordable.
               Compilation database          discovery.py
                        |
                        v
-                Clang analysis              cpp/ (cg-index, LibTooling)
+                Clang analysis              cpp/ (astroclang-index, LibTooling)
                        |
                        v
                  Fact stream                facts.py
@@ -75,7 +75,7 @@ ways.
 
 ## 3. Components
 
-### 3.1 `cg-index` — the extractor (`cpp/`)
+### 3.1 `astroclang-index` — the extractor (`cpp/`)
 
 A C++ binary built on Clang's LibTooling. It is given **one translation unit**
 and the compiler arguments for it, and it writes one **fact stream** to stdout.
@@ -267,7 +267,7 @@ The two failure modes are both about stdout:
 
 ### 3.9 `cli.py` — the same answers from a shell
 
-`cpp-code-graph index .` then `cpp-code-graph mcp`. The query subcommands are a
+`astroclang index .` then `astroclang mcp`. The query subcommands are a
 table that maps a command name to a tool name and a renderer, and they run
 through the same `tools.call`. What the CLI adds is argument parsing, a human
 rendering of the common answers, and exit statuses a script can branch on:

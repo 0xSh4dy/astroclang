@@ -9,7 +9,7 @@ never hands back a partially-populated translation unit as if it were whole.
 import json
 import unittest
 
-from cpp_code_graph.facts import FactStreamError, read_facts
+from astroclang.facts import FactStreamError, read_facts
 
 
 def stream(*records) -> list:

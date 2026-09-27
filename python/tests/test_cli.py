@@ -17,9 +17,9 @@ import sys
 import unittest
 from pathlib import Path
 
-from cpp_code_graph import cli, indexer
-from cpp_code_graph.query import Query
-from cpp_code_graph.store import Store, default_db_path, read_meta
+from astroclang import cli, indexer
+from astroclang.query import Query
+from astroclang.store import Store, default_db_path, read_meta
 
 from tests.test_changes import RepoCase
 from tests.test_query import Fixture
@@ -80,7 +80,7 @@ class TestStatuses(CliCase):
         status, _, err = run(["--db", str(self.root / "absent" / "i.db"),
                               "status"])
         self.assertEqual(status, cli.FAILED)
-        self.assertIn("cpp-code-graph index", err)
+        self.assertIn("astroclang index", err)
 
     def test_a_missing_command_prints_usage_and_says_usage_was_wrong(self):
         status, _, err = run([])
@@ -147,7 +147,7 @@ class TestIndexDiscovery(CliCase):
         self.assertEqual(cli._project_root(self.db, Path("/tmp")), Path("/tmp"))
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestIndexCommand(RepoCase):
     """`index` itself, over a real project with a real compilation database."""
 
@@ -263,7 +263,7 @@ class TestMcpCommand(CliCase):
         self.assertEqual(answer["callers"][0]["symbol"], "run")
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestInARealProcess(RepoCase):
     """The whole thing through a process, which is how it will be used."""
 
@@ -272,9 +272,9 @@ class TestInARealProcess(RepoCase):
 
     def call(self, *argv):
         env = dict(os.environ, PYTHONPATH=str(PYTHON_DIR),
-                   CG_INDEX=str(EXTRACTOR))
-        assert env["CG_INDEX"]
-        return subprocess.run([sys.executable, "-m", "cpp_code_graph", *argv],
+                   ASTROCLANG_INDEX=str(EXTRACTOR))
+        assert env["ASTROCLANG_INDEX"]
+        return subprocess.run([sys.executable, "-m", "astroclang", *argv],
                               cwd=str(PYTHON_DIR), capture_output=True, text=True,
                               env=env)
 
@@ -293,10 +293,10 @@ class TestInARealProcess(RepoCase):
         self.assertIn("more than one", bad.stderr)
 
     def test_the_module_and_the_console_script_are_the_same_command(self):
-        # `python -m cpp_code_graph` and the `cpp-code-graph` script both land
+        # `python -m astroclang` and the `astroclang` script both land
         # in `run`; a difference between them would be a difference in
         # behaviour depending on how the tool was installed.
-        import cpp_code_graph.__main__ as entry
+        import astroclang.__main__ as entry
         self.assertIs(entry.run, cli.run)
 
 

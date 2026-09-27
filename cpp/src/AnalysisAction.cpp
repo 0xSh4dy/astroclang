@@ -130,7 +130,7 @@ public:
                PL.isValid() ? PL.getColumn() : 0, std::string(Msg));
 
     if (Echo) {
-      llvm::errs() << "cg-index: " << severityName(Level) << ": " << Msg << '\n';
+      llvm::errs() << "astroclang-index: " << severityName(Level) << ": " << Msg << '\n';
     }
   }
 

@@ -1,4 +1,4 @@
-// cg-index - semantic extractor for one C/C++ translation unit.
+// astroclang-index - semantic extractor for one C/C++ translation unit.
 //
 // Reads one source file, asks Clang to parse it under the arguments from the
 // compilation database, and writes a fact stream (JSON Lines) to stdout or a
@@ -47,9 +47,9 @@ private:
 };
 
 void printUsage(llvm::raw_ostream &OS) {
-  OS << "cg-index - semantic fact extractor for one C/C++ translation unit\n"
+  OS << "astroclang-index - semantic fact extractor for one C/C++ translation unit\n"
         "\n"
-        "usage: cg-index [options] <source-file>\n"
+        "usage: astroclang-index [options] <source-file>\n"
         "\n"
         "compilation configuration:\n"
         "  -p, --compdb-dir <dir>   directory containing compile_commands.json\n"
@@ -151,7 +151,7 @@ bool parseArgs(int argc, char **argv, Args &A, cg::Options &Opts,
     } else if (A.SourceFile.empty()) {
       A.SourceFile = Arg.str();
     } else {
-      Error = "more than one source file given; cg-index handles one at a time";
+      Error = "more than one source file given; astroclang-index handles one at a time";
       return false;
     }
   }
@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
   std::string Error;
 
   if (!parseArgs(argc, argv, A, Opts, Error)) {
-    llvm::errs() << "cg-index: " << Error << "\n";
+    llvm::errs() << "astroclang-index: " << Error << "\n";
     return 2;
   }
   if (A.Help) {
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
   // run the extractor from anywhere.
   llvm::SmallString<256> Abs(A.SourceFile);
   if (std::error_code EC = llvm::sys::fs::make_absolute(Abs)) {
-    llvm::errs() << "cg-index: cannot resolve " << A.SourceFile << ": "
+    llvm::errs() << "astroclang-index: cannot resolve " << A.SourceFile << ": "
                  << EC.message() << "\n";
     return 2;
   }
@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
   cg::CompilationConfig Config = cg::loadCompilationConfig(
       A.SourceFile, A.CompDBDir, A.CompDBPath, A.ProjectRoot, A.Std);
   if (!Config.DB) {
-    llvm::errs() << "cg-index: no usable compiler arguments for " << A.SourceFile
+    llvm::errs() << "astroclang-index: no usable compiler arguments for " << A.SourceFile
                  << "\n";
     return 3;
   }
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
     FileOut = std::make_unique<llvm::raw_fd_ostream>(A.Output, EC,
                                                      llvm::sys::fs::OF_Text);
     if (EC) {
-      llvm::errs() << "cg-index: cannot write " << A.Output << ": "
+      llvm::errs() << "astroclang-index: cannot write " << A.Output << ": "
                    << EC.message() << "\n";
       return 2;
     }
@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
 
   OS.flush();
   if (A.ShowStats) {
-    llvm::errs() << "cg-index: " << A.SourceFile << " ("
+    llvm::errs() << "astroclang-index: " << A.SourceFile << " ("
                  << cg::toString(Config.Source) << ")\n";
   }
   return 0;

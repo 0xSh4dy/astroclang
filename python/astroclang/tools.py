@@ -648,7 +648,7 @@ def _get_index_status(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     else:
         out["accuracy"] = "empty"
         out["note"] = ("no translation units have been indexed; run "
-                       "`cpp-code-graph index`")
+                       "`astroclang index`")
     for source, word in _CONFIG_NOTES.items():
         if sources.get(source):
             out.setdefault("warnings", []).append(word)

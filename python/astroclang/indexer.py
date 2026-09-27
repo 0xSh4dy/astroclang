@@ -39,7 +39,7 @@ class ExtractorNotFound(RuntimeError):
 
 
 def find_extractor(explicit: Optional[str] = None) -> Path:
-    """Locate the cg-index binary.
+    """Locate the astroclang-index binary.
 
     The environment variable is checked before PATH so that a build tree can
     be used without installing, which is how the tests and the evaluation runs
@@ -51,11 +51,11 @@ def find_extractor(explicit: Optional[str] = None) -> Path:
             return p
         raise ExtractorNotFound(f"no extractor at {explicit}")
 
-    env = os.environ.get("CG_INDEX")
+    env = os.environ.get("ASTROCLANG_INDEX")
     if env and Path(env).is_file():
         return Path(env)
 
-    found = shutil.which("cg-index")
+    found = shutil.which("astroclang-index")
     if found:
         return Path(found)
 
@@ -63,13 +63,13 @@ def find_extractor(explicit: Optional[str] = None) -> Path:
     # not installed.
     here = Path(__file__).resolve()
     for base in (here.parents[2], Path.cwd()):
-        for rel in ("build/cpp/cg-index", "build/cg-index", "cpp/cg-index"):
+        for rel in ("build/cpp/astroclang-index", "build/astroclang-index", "cpp/astroclang-index"):
             candidate = base / rel
             if candidate.is_file():
                 return candidate
 
     raise ExtractorNotFound(
-        "cg-index not found. Build it (cmake --build build) and set CG_INDEX, "
+        "astroclang-index not found. Build it (cmake --build build) and set ASTROCLANG_INDEX, "
         "or put it on PATH."
     )
 

@@ -11,7 +11,7 @@ directory, so running the tests leaves no artefact in the tree.  The
 compilation database is generated rather than checked in because it has to
 contain absolute paths, which differ per machine.
 
-Skipped when the extractor has not been built; `CG_INDEX` or a build tree next
+Skipped when the extractor has not been built; `ASTROCLANG_INDEX` or a build tree next
 to the package is used to find it.
 """
 
@@ -21,10 +21,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cpp_code_graph import indexer
-from cpp_code_graph.indexer import index_project
-from cpp_code_graph.query import Query
-from cpp_code_graph.store import Store
+from astroclang import indexer
+from astroclang.indexer import index_project
+from astroclang.query import Query
+from astroclang.store import Store
 
 CORPUS = Path(__file__).resolve().parent / "corpus"
 
@@ -89,7 +89,7 @@ def _cleanup_index() -> None:
         _INDEX = None
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class Corpus(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

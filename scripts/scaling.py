@@ -47,8 +47,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from cpp_code_graph import indexer  # noqa: E402
-from cpp_code_graph.store import Store, default_db_path  # noqa: E402
+from astroclang import indexer  # noqa: E402
+from astroclang.store import Store, default_db_path  # noqa: E402
 
 SAMPLE_INTERVAL = 0.25       # seconds between memory samples
 MB = 1024 * 1024
@@ -90,7 +90,7 @@ def extractor_rss() -> int:
             continue
         try:
             comm = (entry / "comm").read_text().strip()
-            if comm != "cg-index":
+            if comm != "astroclang-index":
                 continue
             for line in (entry / "status").read_text().splitlines():
                 if line.startswith("VmRSS:"):

@@ -16,7 +16,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from .facts import TranslationUnit
 from .schema import DDL, REBUILD_SYMBOLS, SCHEMA_VERSION
 
-DEFAULT_INDEX_DIR = ".cpp-code-graph"
+DEFAULT_INDEX_DIR = ".astroclang"
 DB_NAME = "index.db"
 
 

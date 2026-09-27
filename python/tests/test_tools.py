@@ -10,10 +10,10 @@ way that says what to do instead.
 import json
 import unittest
 
-from cpp_code_graph import indexer, tools
-from cpp_code_graph.facts import (DiagFact, FileFact, IncludeFact,
+from astroclang import indexer, tools
+from astroclang.facts import (DiagFact, FileFact, IncludeFact,
                                   TranslationUnit)
-from cpp_code_graph.tools import ToolError
+from astroclang.tools import ToolError
 
 from tests.test_changes import RepoCase
 from tests.test_query import Fixture, edge, sym
@@ -560,7 +560,7 @@ class TestIndexStatus(ToolCase):
         self.assertEqual(out["compiler_arguments"], {"unknown": 3})
 
     def test_an_index_built_from_a_compilation_database_says_exact(self):
-        from cpp_code_graph.facts import FileFact, TranslationUnit
+        from astroclang.facts import FileFact, TranslationUnit
 
         path = self.root / "src" / "exact.cpp"
         self.store.ingest(TranslationUnit(
@@ -574,8 +574,8 @@ class TestIndexStatus(ToolCase):
     def test_a_fallback_configuration_is_reported_as_degraded(self):
         # The extractor writes `fallback` when it had no compilation database,
         # and an agent has to be able to tell a semantic index from a guess.
-        from cpp_code_graph.facts import TranslationUnit
-        from cpp_code_graph.facts import FileFact
+        from astroclang.facts import TranslationUnit
+        from astroclang.facts import FileFact
 
         path = self.root / "src" / "guess.cpp"
         self.store.ingest(TranslationUnit(
@@ -588,7 +588,7 @@ class TestIndexStatus(ToolCase):
                             for w in out["warnings"]))
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestAgainstRealExtraction(Corpus):
     """The tools over an index built by the extractor from real files.
 
@@ -624,7 +624,7 @@ class TestAgainstRealExtraction(Corpus):
         self.assertIn("c", out["language"])
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestChangeTools(RepoCase):
     def test_a_changed_body_reaches_the_tool_with_its_scope(self):
         self.edit("src/shapes.cpp",

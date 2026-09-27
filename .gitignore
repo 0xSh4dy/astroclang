@@ -17,7 +17,7 @@ dist/
 venv/
 
 # Index artifacts produced by the tool
-.cpp-code-graph/
+.astroclang/
 *.ccg.db
 *.ccg.db-journal
 *.ccg.db-wal
@@ -25,7 +25,7 @@ venv/
 # Test scratch space
 tests/tmp/
 tests/**/compile_commands.json
-tests/**/.cpp-code-graph/
+tests/**/.astroclang/
 
 # Editors / OS
 .vscode/

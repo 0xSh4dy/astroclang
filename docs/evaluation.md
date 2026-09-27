@@ -29,7 +29,7 @@ generated with `scripts/make_compdb.py` at `-std=c++17`; the tool's own with
 the same script against its CMake configuration. That the standard matters is
 not a detail: the first googletest run used `-std=c++14` and lost everything
 behind the first `if constexpr`, which appears as a missing symbol rather than
-as an error. `cg-index --print-config` prints what a file will be compiled
+as an error. `astroclang-index --print-config` prints what a file will be compiled
 with, and is the way to check a generated database against the tree.
 
 **What is deliberately not measured:** peak memory of a full parallel run as a
@@ -86,7 +86,7 @@ clang++ -std=c++17 -fsyntax-only -I... gmock_all_test.cc
 | | Peak RSS | Time |
 | --- | --- | --- |
 | `clang++ -fsyntax-only` | 1840 MB | 35.87 s |
-| `cg-index` | 1864 MB | 34.85 s |
+| `astroclang-index` | 1864 MB | 34.85 s |
 
 The extractor adds about 1.4% over the front end it drives. The memory is the
 C++ front end's cost, not this tool's, and no amount of care in the visitor

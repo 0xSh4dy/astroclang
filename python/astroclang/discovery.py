@@ -54,7 +54,7 @@ def language_of(path) -> str:
 # already been told about.  Generated sources found this way produce duplicate
 # symbols, which the merge collapses, rather than missing ones.
 SKIP_DIRS = {
-    ".git", ".hg", ".svn", ".cpp-code-graph", "node_modules", "__pycache__",
+    ".git", ".hg", ".svn", ".astroclang", "node_modules", "__pycache__",
     ".cache", ".ccache", "CMakeFiles",
 }
 

@@ -23,7 +23,7 @@ A project indexed under a standard older than it needs does not fail loudly:
 it fails at the first `if constexpr`, and everything behind that point is
 missing from the graph.  googletest at `-std=c++14` reports "C++ versions less
 than C++17 are not supported"; at `-std=c++17` it reports nothing.  Check the
-generated file against the tree - `cg-index --print-config` prints what a file
+generated file against the tree - `astroclang-index --print-config` prints what a file
 would be compiled with - before trusting any number measured through it.
 """
 

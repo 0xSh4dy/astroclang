@@ -1,6 +1,6 @@
 # How Clang is used
 
-`cg-index` is a Clang LibTooling program. This document records which parts of
+`astroclang-index` is a Clang LibTooling program. This document records which parts of
 Clang it uses, which it deliberately does not, and why each choice was made.
 
 ---
@@ -77,7 +77,7 @@ back.
 
 ---
 
-## 3. The pipeline inside `cg-index`
+## 3. The pipeline inside `astroclang-index`
 
 ```
 main.cpp

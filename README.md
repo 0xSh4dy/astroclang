@@ -1,4 +1,4 @@
-# cpp-code-graph
+# astroclang
 
 A semantic index of a C/C++ codebase, built from Clang, and served to coding
 agents over MCP.
@@ -14,9 +14,9 @@ The extractor is a C++ binary built against Clang; build it first.
 
 ```sh
 cmake -B build -G Ninja && cmake --build build      # or drop -G Ninja
-                                                    # produces build/cpp/cg-index
-pip install -e python/                              # the `cpp-code-graph` command
-export CG_INDEX=$PWD/build/cpp/cg-index             # or put cg-index on PATH
+                                                    # produces build/cpp/astroclang-index
+pip install -e python/                              # the `astroclang` command
+export ASTROCLANG_INDEX=$PWD/build/cpp/astroclang-index             # or put astroclang-index on PATH
 ```
 
 Requires LLVM/Clang 16 or newer (development headers and libraries) and Python
@@ -25,12 +25,12 @@ Requires LLVM/Clang 16 or newer (development headers and libraries) and Python
 ## Use
 
 ```sh
-cpp-code-graph index .                  # reads compile_commands.json if there is one
-cpp-code-graph callers Foo::resize      # who calls it
-cpp-code-graph impact Foo::resize       # what a change could reach, by degree
-cpp-code-graph context Foo::resize      # a small region of source around it
-cpp-code-graph changed HEAD~1           # which symbols that revision touched
-cpp-code-graph mcp                      # serve the same answers over MCP
+astroclang index .                  # reads compile_commands.json if there is one
+astroclang callers Foo::resize      # who calls it
+astroclang impact Foo::resize       # what a change could reach, by degree
+astroclang context Foo::resize      # a small region of source around it
+astroclang changed HEAD~1           # which symbols that revision touched
+astroclang mcp                      # serve the same answers over MCP
 ```
 
 Full usage, and what the tool knows and does not, is in
@@ -53,8 +53,8 @@ Full usage, and what the tool knows and does not, is in
 
 | Path | What it is |
 | --- | --- |
-| `cpp/` | `cg-index`, the Clang LibTooling extractor — one translation unit, JSON Lines out |
-| `python/cpp_code_graph/` | the store, the query layer, the tools, the MCP server, the CLI |
+| `cpp/` | `astroclang-index`, the Clang LibTooling extractor — one translation unit, JSON Lines out |
+| `python/astroclang/` | the store, the query layer, the tools, the MCP server, the CLI |
 | `python/tests/` | the test suite, including the C/C++ corpus |
 | `scripts/` | `evaluate.py`, `make_compdb.py` |
 

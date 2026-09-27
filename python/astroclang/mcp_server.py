@@ -27,7 +27,7 @@ from . import __version__, tools
 from .query import Query
 from .store import Store
 
-SERVER_NAME = "cpp-code-graph"
+SERVER_NAME = "astroclang"
 
 # Newest first.  The client proposes a version, and gets its own back when it is
 # one of these; otherwise it gets the newest, which is the protocol's way of
@@ -176,7 +176,7 @@ class Server:
         if self.query is None:
             return _text_content(
                 {"error": self.missing or "no index is open",
-                 "hint": "run `cpp-code-graph index` and retry"}, is_error=True)
+                 "hint": "run `astroclang index` and retry"}, is_error=True)
 
         arguments = params.get("arguments")
         try:
@@ -233,7 +233,7 @@ def open_index(db_path, root=None, missing: str = "") -> Server:
     if not path.is_file():
         return Server(missing=missing or (
             f"there is no index at {path}; build one with "
-            f"`cpp-code-graph index`"))
+            f"`astroclang index`"))
     store = Store(path, project_root=Path(root) if root else None)
     return Server(query=Query(store), store=store)
 

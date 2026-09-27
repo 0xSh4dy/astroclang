@@ -14,11 +14,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cpp_code_graph import changes, indexer
-from cpp_code_graph.git import GitError, collapse_ranges, diff, repository_root
-from cpp_code_graph.indexer import index_project
-from cpp_code_graph.query import Query
-from cpp_code_graph.store import Store
+from astroclang import changes, indexer
+from astroclang.git import GitError, collapse_ranges, diff, repository_root
+from astroclang.indexer import index_project
+from astroclang.query import Query
+from astroclang.store import Store
 
 CORPUS = Path(__file__).resolve().parent / "corpus"
 
@@ -144,7 +144,7 @@ class TestDiffParsing(RepoCase):
         self.assertEqual(collapse_ranges([(7, 7)]), "7")
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestChangedSymbols(RepoCase):
     def test_a_changed_body_names_the_function_that_contains_it(self):
         self.edit("src/shapes.cpp",

@@ -30,10 +30,10 @@ from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from cpp_code_graph import indexer  # noqa: E402
-from cpp_code_graph.query import Query  # noqa: E402
-from cpp_code_graph.store import Store, default_db_path  # noqa: E402
-from cpp_code_graph import tools  # noqa: E402
+from astroclang import indexer  # noqa: E402
+from astroclang.query import Query  # noqa: E402
+from astroclang.store import Store, default_db_path  # noqa: E402
+from astroclang import tools  # noqa: E402
 
 # What an agent asks, in the order it tends to ask it: find the thing, look at
 # it, then walk outward.  Each entry is a tool call the MCP server would serve.

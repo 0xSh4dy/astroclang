@@ -286,7 +286,7 @@ The core decision is to **stop inferring semantics from syntax and ask a
 compiler instead.**
 
 ```
-                       code-review-graph            cpp-code-graph
+                       code-review-graph            astroclang
                        ------------------           ---------------
 what is parsed         every file, independently    each TU, as the compiler sees it
 what config is used    none                         compile_commands.json (or a reported fallback)

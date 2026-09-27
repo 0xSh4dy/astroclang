@@ -1,4 +1,4 @@
-# cpp-code-graph
+# astroclang
 
 A semantic index of a C/C++ codebase, built from Clang, and served to coding
 agents over MCP.
@@ -16,9 +16,9 @@ the type information that only exists after semantic analysis.
 The extractor is a separate binary; build it first.
 
 ```sh
-cmake -B build -G Ninja && cmake --build build      # produces build/cpp/cg-index
-pip install -e python/                              # the `cpp-code-graph` command
-export CG_INDEX=$PWD/build/cpp/cg-index             # or put cg-index on PATH
+cmake -B build -G Ninja && cmake --build build      # produces build/cpp/astroclang-index
+pip install -e python/                              # the `astroclang` command
+export ASTROCLANG_INDEX=$PWD/build/cpp/astroclang-index             # or put astroclang-index on PATH
 ```
 
 There are no Python dependencies. The index is SQLite and the MCP server speaks
@@ -27,18 +27,18 @@ JSON-RPC directly.
 ## Use
 
 ```sh
-cpp-code-graph index .                  # reads compile_commands.json if there is one
-cpp-code-graph callers Foo::resize      # who calls it
-cpp-code-graph impact Foo::resize       # what a change could reach, by degree
-cpp-code-graph context Foo::resize      # a small region of source around it
-cpp-code-graph changed HEAD~1           # which symbols that revision touched
-cpp-code-graph mcp                      # serve the same answers over MCP
+astroclang index .                  # reads compile_commands.json if there is one
+astroclang callers Foo::resize      # who calls it
+astroclang impact Foo::resize       # what a change could reach, by degree
+astroclang context Foo::resize      # a small region of source around it
+astroclang changed HEAD~1           # which symbols that revision touched
+astroclang mcp                      # serve the same answers over MCP
 ```
 
 Every answer names its symbols as `file:line`, and every command that takes a
 symbol accepts that spelling back, so an answer can be handed to the next
 question without copying anything. `--json` prints the payload an agent would
-receive. Run `cpp-code-graph <command> --help` for the rest.
+receive. Run `astroclang <command> --help` for the rest.
 
 ## What it knows
 
@@ -53,7 +53,7 @@ Two things are worth knowing before trusting an answer:
 * Without a `compile_commands.json`, the tool falls back to conventional
   include directories. Include paths, language standard and feature macros are
   then guesses, so headers may be missed and declarations behind them absent.
-  `cpp-code-graph status` reports the accuracy as `exact`, `degraded` or
+  `astroclang status` reports the accuracy as `exact`, `degraded` or
   `unknown` rather than leaving it to be assumed.
 * The index describes the tree it was built from. If the revision has moved
   since, `status` says so.

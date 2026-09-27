@@ -15,8 +15,8 @@ import sys
 import unittest
 from pathlib import Path
 
-from cpp_code_graph import indexer, tools
-from cpp_code_graph.mcp_server import (DEFAULT_PROTOCOL, PARSE_ERROR,
+from astroclang import indexer, tools
+from astroclang.mcp_server import (DEFAULT_PROTOCOL, PARSE_ERROR,
                                        PROTOCOL_VERSIONS, Server, open_index)
 
 from tests.test_query import Fixture
@@ -69,13 +69,13 @@ class WithoutAnIndex(unittest.TestCase):
                   {"name": "get_file", "arguments": {"path": "x.cpp"}})
         self.assertTrue(out["result"]["isError"])
         self.assertIn("no index at", payload(out)["error"])
-        self.assertIn("cpp-code-graph index", payload(out)["hint"])
+        self.assertIn("astroclang index", payload(out)["hint"])
 
     def test_a_missing_index_file_produces_exactly_that_server(self):
         server = open_index(Path("/nonexistent/index.db"))
         self.assertIsNone(server.query)
         out = ask(server, "tools/call", {"name": "get_index_status"})
-        self.assertIn("cpp-code-graph index", payload(out)["hint"])
+        self.assertIn("astroclang index", payload(out)["hint"])
 
 
 class TestHandshake(WithoutAnIndex):
@@ -92,7 +92,7 @@ class TestHandshake(WithoutAnIndex):
 
     def test_the_handshake_names_the_server_and_what_it_offers(self):
         out = ask(self.server, "initialize", {})["result"]
-        self.assertEqual(out["serverInfo"]["name"], "cpp-code-graph")
+        self.assertEqual(out["serverInfo"]["name"], "astroclang")
         self.assertIn("tools", out["capabilities"])
         # The instructions are the one place to explain the index to an agent
         # before it has asked anything.
@@ -205,7 +205,7 @@ class TestFraming(unittest.TestCase):
 
 
 @unittest.skipIf(ClientSession is None, "the mcp SDK is not installed")
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestWithTheReferenceClient(Corpus):
     """The whole thing, over a real pipe, under the real MCP client.
 
@@ -215,7 +215,7 @@ class TestWithTheReferenceClient(Corpus):
 
     SCRIPT = (
         "import sys\n"
-        "from cpp_code_graph.mcp_server import open_index, serve_stdio\n"
+        "from astroclang.mcp_server import open_index, serve_stdio\n"
         "raise SystemExit(serve_stdio(open_index(sys.argv[1], sys.argv[2])))\n"
     )
 
