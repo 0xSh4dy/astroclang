@@ -352,7 +352,9 @@ says what is known and what is owed rather than estimating it.
 
 ## 10. Limitations
 
-Stated plainly, in rough order of how likely they are to matter.
+Stated plainly, in rough order of how likely they are to matter. This is the
+summary; [`limitations.md`](limitations.md) is the full list, organised by what
+a reader would be doing when they hit each one.
 
 **Resolution is bounded by what is indexed.** 45.8% of call edges resolve to a
 body the index holds. The rest are calls into libstdc++ and other system

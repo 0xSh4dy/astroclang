@@ -120,9 +120,11 @@ database for a tree that has none.
 since, `status` says so, and a diff is taken against the revision the index
 remembers.
 
-The measured resolution rate, the constructs that are deliberately not indexed,
-and the bottlenecks that were found and left alone are all in
-[`docs/evaluation.md`](docs/evaluation.md) rather than buried here.
+The constructs the index does not see at all are listed in
+[`docs/limitations.md`](docs/limitations.md); the measured resolution rate and
+the bottlenecks that were found and left alone are in
+[`docs/evaluation.md`](docs/evaluation.md). None of it is buried here on the
+grounds that a short README reads better.
 
 ## Documentation
 
@@ -131,10 +133,11 @@ and the bottlenecks that were found and left alone are all in
 | [`docs/architecture.md`](docs/architecture.md) | what each component is for, and the decisions behind it |
 | [`docs/clang-usage.md`](docs/clang-usage.md) | which Clang APIs, why LibTooling over clangd/ASTMatchers/libclang, and what is deliberately not indexed |
 | [`docs/semantic-model.md`](docs/semantic-model.md) | identity, node kinds, edge kinds, containment, and what the model does not claim |
+| [`docs/limitations.md`](docs/limitations.md) | what the index does not see, does not resolve, or resolves differently than a reader would expect |
 | [`docs/mcp.md`](docs/mcp.md) | every MCP tool, its arguments, and worked examples |
 | [`docs/evaluation.md`](docs/evaluation.md) | indexing cost, database size, query latency, resolution rate, incremental speedup |
 | [`docs/reference-analysis.md`](docs/reference-analysis.md) | what was learned from `code-review-graph`, and what was rejected |
-| [`docs/final-report.md`](docs/final-report.md) | the project as a whole, including limitations and the commit history |
+| [`docs/final-report.md`](docs/final-report.md) | the project as a whole, and the commit history |
 
 ## Layout
 
