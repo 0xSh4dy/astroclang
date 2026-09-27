@@ -47,7 +47,6 @@ target_link_libraries(cg-index
     clangSema
     clangAnalysis
     clangAST
-    clangASTMatchers
     clangBasic
     clangEdit
     clangLex
