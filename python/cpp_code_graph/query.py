@@ -31,6 +31,10 @@ DEPENDENCY_EDGES = ("calls", "references", "calls_indirect", "inherits",
 DEFAULT_CALLER_LIMIT = 50
 DEFAULT_IMPACT_LIMIT = 60
 
+# How many call sites to name before summarising the rest.  A function called
+# from fifty places does not need fifty lines of answer to say so.
+MAX_CALL_SITES = 5
+
 
 @dataclass
 class SymbolRef:
@@ -296,28 +300,56 @@ class Query:
             ORDER BY e.kind, s.qualified, e.line
             LIMIT ?
         """
-        rows = self.conn.execute(q, [usr, *kinds, limit])
-        out = []
-        for r in rows:
+        # Edges are stored per translation unit, and a header included by two
+        # hundred files reports its relationships two hundred times.  Folding
+        # by target here is what keeps "what derives from Base" a list of
+        # classes rather than a list of inclusion events.
+        folded: Dict[str, Dict[str, Any]] = {}
+        for r in self.conn.execute(q, [usr, *kinds, limit]):
             if not include_system and not self._is_project_file(r["file_id"]):
                 continue
-            # The edge carries the call site; the symbol carries the
-            # declaration.  Both are useful and they are usually different
-            # lines, so the call site is reported as its own field.
-            ref = self._ref_from_row(r, with_usr=with_usr)
-            site = self.loc(r["efile"], r["eline"])
-            if site and site != ref.get("location"):
-                ref["call_site"] = site
+            key = r["other_usr"]
+            entry = folded.get(key)
+            if entry is None:
+                # The join is on the merged symbol table, so every row for one
+                # target describes the symbol identically.
+                entry = self._ref_from_row(r, with_usr=with_usr)
+                entry["_weight"] = 0
+                entry["_sites"] = []
+                entry["_kinds"] = set()
+                folded[key] = entry
+            entry["_weight"] += r["eweight"] or 1
+            entry["_kinds"].add(r["ekind"])
             eflags = _flags(r["eflags"])
             if eflags.get("virt"):
-                ref["dispatch"] = "virtual"
+                entry["dispatch"] = "virtual"
             if eflags.get("pure"):
-                ref["dispatch"] = "pure virtual"
-            if r["eweight"] and r["eweight"] > 1:
-                ref["occurrences"] = r["eweight"]
-            if r["ekind"] != kinds[0]:
-                ref["via"] = r["ekind"]
-            out.append(ref)
+                entry["dispatch"] = "pure virtual"
+            site = self.loc(r["efile"], r["eline"])
+            if site and site != entry.get("location") and site not in entry["_sites"]:
+                entry["_sites"].append(site)
+
+        out = []
+        for entry in folded.values():
+            sites = entry.pop("_sites")
+            weight = entry.pop("_weight")
+            ekinds = entry.pop("_kinds")
+            # The edge carries the call site; the symbol carries the
+            # declaration.  Both are useful and are usually different lines,
+            # so the call site is reported as its own field - capped, because a
+            # function called from fifty places does not need fifty lines of
+            # answer to say so.
+            if len(sites) == 1:
+                entry["call_site"] = sites[0]
+            elif sites:
+                entry["call_sites"] = sites[:MAX_CALL_SITES]
+                if len(sites) > MAX_CALL_SITES:
+                    entry["call_site_count"] = len(sites)
+            if weight > 1:
+                entry["occurrences"] = weight
+            if ekinds != {kinds[0]}:
+                entry["via"] = sorted(ekinds)
+            out.append(entry)
         return out
 
     def callers(self, usr: str, limit: int = DEFAULT_CALLER_LIMIT,
@@ -346,29 +378,30 @@ class Query:
     def inheritance(self, usr: str, transitive: bool = True
                     ) -> Dict[str, Any]:
         out: Dict[str, Any] = {"bases": [], "derived": []}
-        base_rows = self.conn.execute(
-            "SELECT s.*, e.flags AS eflags, e.file_id AS efile, e.line AS eline"
-            " FROM raw_edge e JOIN symbol s ON s.usr = e.dst"
-            " WHERE e.kind = 'inherits' AND e.src = ?", (usr,))
-        for r in base_rows:
-            entry = self._ref_from_row(r)
-            f = _flags(r["eflags"])
-            if f.get("acc"):
-                entry["access"] = _ACCESS_WORDS.get(f["acc"], f["acc"])
-            if f.get("virtual"):
-                entry["virtual"] = True
-            out["bases"].append(entry)
+        # Deduplicated by USR: a base clause in a header is re-reported by
+        # every translation unit that includes it.
+        def relatives(sql: str, args) -> List[Dict[str, Any]]:
+            seen: Dict[str, Dict[str, Any]] = {}
+            for r in self.conn.execute(sql, args):
+                entry = seen.get(r["usr"])
+                if entry is None:
+                    entry = self._ref_from_row(r)
+                    seen[r["usr"]] = entry
+                f = _flags(r["eflags"])
+                if f.get("acc"):
+                    entry["access"] = _ACCESS_WORDS.get(f["acc"], f["acc"])
+                if f.get("virtual"):
+                    entry["virtual"] = True
+            return list(seen.values())
 
-        derived_rows = self.conn.execute(
+        out["bases"] = relatives(
+            "SELECT s.*, e.flags AS eflags FROM raw_edge e"
+            " JOIN symbol s ON s.usr = e.dst"
+            " WHERE e.kind = 'inherits' AND e.src = ?", (usr,))
+        out["derived"] = relatives(
             "SELECT s.*, e.flags AS eflags FROM raw_edge e"
             " JOIN symbol s ON s.usr = e.src"
             " WHERE e.kind = 'inherits' AND e.dst = ?", (usr,))
-        for r in derived_rows:
-            entry = self._ref_from_row(r)
-            f = _flags(r["eflags"])
-            if f.get("acc"):
-                entry["access"] = _ACCESS_WORDS.get(f["acc"], f["acc"])
-            out["derived"].append(entry)
 
         # A template is what a reader means by "what derives from Base" even
         # when the base clause named an instantiation.
@@ -394,17 +427,32 @@ class Query:
                 {b["symbol"] for b in out["bases"]}
             ]
 
-        out["overrides"] = [
-            self._ref_from_row(r) for r in self.conn.execute(
-                "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.src"
-                " WHERE e.kind = 'overrides' AND e.dst = ?", (usr,))
-        ]
-        out["overridden"] = [
-            self._ref_from_row(r) for r in self.conn.execute(
-                "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.dst"
-                " WHERE e.kind = 'overrides' AND e.src = ?", (usr,))
-        ]
+        out["overrides"] = self._distinct(
+            "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.src"
+            " WHERE e.kind = 'overrides' AND e.dst = ?", (usr,))
+        out["overridden"] = self._distinct(
+            "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.dst"
+            " WHERE e.kind = 'overrides' AND e.src = ?", (usr,))
+
+        # `overrides` edges point at the method actually overridden, so a
+        # three-level hierarchy - Tagged::area over Circle::area over
+        # Shape::area - leaves the top level two hops from the bottom.  A call
+        # through a Shape* can reach Tagged::area, so a reader asking what
+        # implements this interface needs the whole chain, not the first link.
+        direct = {o["symbol"] for o in out["overrides"]}
+        deeper = [o for o in self._transitive(usr, "overrides", "in")
+                  if o["symbol"] not in direct]
+        if deeper:
+            out["overrides_indirectly"] = deeper
         return {k: v for k, v in out.items() if v}
+
+    def _distinct(self, sql: str, args) -> List[Dict[str, Any]]:
+        """One entry per distinct symbol, in the order the query returned them."""
+        seen: Dict[str, Dict[str, Any]] = {}
+        for row in self.conn.execute(sql, args):
+            if row["usr"] not in seen:
+                seen[row["usr"]] = self._ref_from_row(row)
+        return list(seen.values())
 
     def _transitive(self, usr: str, kind: str, direction: str,
                     max_depth: int = 8) -> List[Dict[str, Any]]:
@@ -600,9 +648,18 @@ class Query:
             add(possible, entry,
                 "overrides this method, so a call through the base may reach it")
 
-        for entry in inherits.get("descendants", []):
+        for entry in inherits.get("overrides_indirectly", []):
             add(possible, entry,
-                "inherits from this type; inherited members carry the change")
+                "overrides a method that overrides this one, so a call through "
+                "the base may reach it")
+
+        if not _is_callable(target["kind"]):
+            # Only a type has descendants.  A method's subclasses are reachable
+            # through its overrides, which are handled above.
+            for entry in inherits.get("descendants", []):
+                add(possible, entry,
+                    "inherits from this type, so it carries the change through "
+                    "the members it did not redefine")
 
         for entry in self._edges(usr, ("calls_indirect",), "in", limit):
             add(possible, entry,

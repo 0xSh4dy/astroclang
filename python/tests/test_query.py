@@ -245,6 +245,90 @@ class TestEdges(Fixture):
         refs = self.q.references_to(target)
         self.assertEqual([r["symbol"] for r in refs], ["run"])
 
+    def test_a_relationship_reported_by_two_translation_units_appears_once(self):
+        # A base clause in a header is seen by every translation unit that
+        # includes the header.  Two hundred includers must not turn one class
+        # hierarchy into two hundred identical lines.
+        self.store.ingest(TranslationUnit(
+            path=str(self.other), complete=True,
+            files=[FileFact(0, str(self.other), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast2", "class", "Fast2", "mem::Fast2",
+                         file=1, line=20)],
+            edges=[edge("inherits", "c:@N@mem@S@Fast2", "c:@N@mem@S@Allocator",
+                        file=1, line=20, flags={"acc": "pub"})],
+            includes=[IncludeFact(0, 1, 1, False, "iface.h")],
+        ))
+        self.store.rebuild_symbols()
+        tree = self.q.inheritance(self.usr("mem::Allocator"))
+        self.assertEqual([d["symbol"] for d in tree["derived"]],
+                         ["mem::Fast", "mem::Fast2"])
+
+    def test_call_sites_are_collected_rather_than_repeated(self):
+        # An inline function defined in a header is compiled into every
+        # translation unit that includes it, so its call to `size` is reported
+        # once per includer.  The same call, seen twice, is still one call from
+        # one caller - not two callers.
+        target = self.usr("mem::Allocator::size")
+        for name in ("a.cpp", "b.cpp"):
+            path = self.root / "src" / name
+            self.store.ingest(TranslationUnit(
+                path=str(path), complete=True,
+                files=[FileFact(0, str(path), False),
+                       FileFact(1, str(self.hdr_path()), False)],
+                symbols=[sym("c:@N@mem@S@Helper@F@inline_size", "method",
+                             "inline_size", "mem::Helper::inline_size", "()",
+                             file=1, line=30)],
+                edges=[edge("calls", "c:@N@mem@S@Helper@F@inline_size", target,
+                            file=1, line=31)],
+            ))
+        self.store.rebuild_symbols()
+        callers = [c for c in self.q.callers(target)
+                   if c["symbol"] == "mem::Helper::inline_size"]
+        self.assertEqual(len(callers), 1)
+        # Counted twice, sited once: the two translation units are reporting
+        # the same line, and saying so twice would be noise.
+        self.assertEqual(callers[0]["occurrences"], 2)
+        self.assertEqual(callers[0]["location"], "include/iface.h:30")
+        self.assertEqual(callers[0]["call_site"], "include/iface.h:31")
+        self.assertNotIn("call_sites", callers[0])
+
+    def test_a_caller_with_many_call_sites_summarises_them(self):
+        # A function called from more than a handful of places does not need a
+        # line of answer per call site to say so.
+        target = self.usr("mem::Allocator::size")
+        path = self.root / "src" / "many.cpp"
+        self.store.ingest(TranslationUnit(
+            path=str(path), complete=True,
+            files=[FileFact(0, str(path), False)],
+            symbols=[sym("c:@F@many", "function", "many", "many", "()", file=0,
+                         line=1)],
+            edges=[edge("calls", "c:@F@many", target, file=0, line=10 + i)
+                   for i in range(9)],
+        ))
+        self.store.rebuild_symbols()
+        entry = next(c for c in self.q.callers(target)
+                     if c["symbol"] == "many")
+        self.assertEqual(len(entry["call_sites"]), 5)
+        self.assertEqual(entry["call_site_count"], 9)
+
+    def test_a_virtual_base_is_distinguishable_from_a_repeat(self):
+        # Two different bases that happen to share a name is not the same as
+        # one base reported twice; the fold keys on the USR, not the name.
+        self.store.ingest(TranslationUnit(
+            path=str(self.other), complete=True,
+            files=[FileFact(0, str(self.other), False)],
+            symbols=[sym("c:@N@other@S@Allocator", "class", "Allocator",
+                         "other::Allocator", file=0, line=30),
+                     sym("c:@S@Both", "class", "Both", "Both", file=0, line=31)],
+            edges=[edge("inherits", "c:@S@Both", "c:@N@other@S@Allocator",
+                        file=0, line=31, flags={"acc": "priv"})],
+        ))
+        self.store.rebuild_symbols()
+        tree = self.q.inheritance(self.usr("Both"))
+        self.assertEqual([b["symbol"] for b in tree["bases"]],
+                         ["other::Allocator"])
+
     def test_occurrence_count_survives(self):
         target = self.usr("mem::Allocator::size")
         self.store.ingest(TranslationUnit(
