@@ -146,9 +146,19 @@ CREATE INDEX IF NOT EXISTS idx_symbol_def_file ON symbol(def_file_id);
 
 # Rebuilding `symbol` from `raw_symbol` in one statement keeps the merge rule
 # in a single place.  The ORDER BY decides which of several reports of the same
-# USR wins: a full record beats a stub, a project file beats a system header,
-# and the remaining ties break on file and line so the result is stable across
-# runs rather than dependent on insertion order.
+# USR wins.  In order of precedence: a full record beats a stub; a record that
+# knows where the definition is beats one that does not, because only the
+# translation unit that contains a definition can report its location and the
+# ones that merely included the header cannot; a project file beats a system
+# header; and the remaining ties break on file and line so the result is stable
+# across runs rather than dependent on insertion order.
+#
+# That third term is not cosmetic.  A method declared in a header is reported
+# by every translation unit that includes it, all of them agreeing on the
+# declaration and only one of them knowing the definition.  Without it the
+# winner is whichever row the tie-break happened to favour, so adding an
+# unrelated file to the project could strip a symbol of its definition - and
+# with it, the ability to find the symbol by the line its body is on.
 REBUILD_SYMBOLS = """
 DELETE FROM symbol;
 
@@ -161,6 +171,7 @@ ranked AS (
         ROW_NUMBER() OVER (
             PARTITION BY r.usr
             ORDER BY r.stub ASC,
+                     (r.def_file_id IS NULL) ASC,
                      COALESCE(f.in_project, 0) DESC,
                      COALESCE(f.is_system, 0) ASC,
                      COALESCE(r.file_id, 2147483647) ASC,

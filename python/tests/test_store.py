@@ -195,6 +195,33 @@ class TestMerge(StoreCase):
         self.assertEqual(self.store.file_path(row["file_id"]), str(src))
         self.assertEqual(row["line"], 42)
 
+    def test_a_record_that_knows_the_definition_beats_one_that_does_not(self):
+        # A method declared in a header is reported by every translation unit
+        # that includes it; only the one holding the definition can say where
+        # the body is.  If the merge picks by file and line alone the winner
+        # depends on how many files were indexed, so adding an unrelated file
+        # could strip a symbol of its definition - and with it the ability to
+        # find the symbol by the line its body is on.
+        hdr = self.header()
+        declaring = self.source("declaring.cpp")
+        defining = self.source("defining.cpp")
+        self.store.ingest(tu(declaring, [(declaring, False), (hdr, False)],
+                             symbols=[SymbolFact(usr="u", kind="method",
+                                                 qualified="T::go", file=1,
+                                                 line=4)]))
+        self.store.ingest(tu(defining, [(defining, False), (hdr, False)],
+                             symbols=[SymbolFact(usr="u", kind="method",
+                                                 qualified="T::go", file=1,
+                                                 line=4, def_file=0,
+                                                 def_line=90, end_line=95)]))
+        self._merge()
+        row = self.store.connection().execute(
+            "SELECT def_file_id, def_line FROM symbol WHERE usr = 'u'"
+        ).fetchone()
+        self.assertEqual(self.store.file_path(row["def_file_id"]),
+                         str(defining))
+        self.assertEqual(row["def_line"], 90)
+
     def test_translation_unit_count_is_recorded(self):
         hdr = self.header()
         for name in ("a.cpp", "b.cpp", "c.cpp"):
