@@ -167,6 +167,7 @@ void FactWriter::emitMetaRaw(llvm::StringRef Key, const std::string &RawJson) {
 void FactWriter::emitSymbol(const Symbol &S) {
   std::string Line = "{\"t\":\"sym\",\"u\":";
   writeJsonString(Line, S.USR);
+  if (S.Stub) Line += ",\"stub\":1";
   Line += ",\"k\":";
   writeJsonString(Line, S.Kind);
   Line += ",\"n\":";

@@ -477,10 +477,11 @@ std::string Indexer::parentUSROf(const Decl *D) {
   return reference(PD);
 }
 
-FactWriter::Symbol Indexer::buildSymbol(const Decl *D,
-                                        const std::string &USR) const {
+FactWriter::Symbol Indexer::buildSymbol(const Decl *D, const std::string &USR,
+                                        bool Stub) const {
   FactWriter::Symbol S;
   S.USR = USR;
+  S.Stub = Stub;
   S.Kind = kindOf(D);
   if (const auto *ND = dyn_cast<NamedDecl>(D)) {
     S.Name = ND->getNameAsString();
@@ -530,7 +531,7 @@ const std::string &Indexer::emitNode(const Decl *Original, bool Full) {
   bool AlreadyStub = StubNodes.count(U) != 0;
   if (AlreadyStub && !Full) return U;
 
-  W.emitSymbol(buildSymbol(D, U));
+  W.emitSymbol(buildSymbol(D, U, /*Stub=*/!Full));
   ++St.Symbols;
   if (Full) {
     FullNodes.insert(U);

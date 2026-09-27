@@ -117,7 +117,8 @@ private:
   std::string computeUSR(const clang::Decl *D);
   std::string computeSyntheticUSR(const clang::Decl *D);
 
-  FactWriter::Symbol buildSymbol(const clang::Decl *D, const std::string &USR) const;
+  FactWriter::Symbol buildSymbol(const clang::Decl *D, const std::string &USR,
+                                 bool Stub) const;
   std::string buildFlags(const clang::Decl *D) const;
   static llvm::StringRef kindOf(const clang::Decl *D);
   std::string signatureOf(const clang::Decl *D) const;

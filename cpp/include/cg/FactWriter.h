@@ -73,6 +73,10 @@ public:
     int DefFile = -1, DefLine = 0, DefCol = 0;
     std::string ParentUSR;   // enclosing class/namespace/function
     std::string Flags;       // pre-rendered JSON object body, may be empty
+    /// True when this node exists only because something referred to it, so
+    /// the declaration itself was never walked.  The store prefers a full
+    /// record when the same symbol is seen both ways across translation units.
+    bool Stub = false;
   };
   void emitSymbol(const Symbol &S);
 
