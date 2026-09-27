@@ -263,7 +263,7 @@ named, because an empty answer would otherwise read as "nothing changed".
 
 ## 8. Tests
 
-**328 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
+**333 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
 the real extractor against a small adversarial corpus and assert on
 **resolution**, not on whether syntax nodes exist — which is the only kind of
 assertion that distinguishes this tool from a parser.
@@ -407,10 +407,13 @@ synthetic identities (4.2% of edges) rather than a stable cross-TU name.
 
 ## 11. Git history
 
-25 commits, each a working checkpoint with tests run before it. The sequence is
-the development order: scaffold and reference analysis, then the extractor, then
-the store, then the query layer, then the agent surface, then measurement and
-the fixes measurement forced.
+35 commits, each a working checkpoint with tests run before it, plus three
+merges. The sequence is the development order: scaffold and reference analysis,
+then the extractor, then the store, then the query layer, then the agent
+surface, then measurement and the fixes measurement forced. The last nine are
+the tail of that: fixes found by using the tool and reading its answers rather
+than by testing it, merged onto a branch so the trunk stayed untouched while
+the combination was what got tested.
 
 ```text
 011fc3a  chore: project scaffolding and reference analysis
@@ -438,6 +441,16 @@ b725a8d  perf(query): measure a real project, and fix what it showed
 25452e3  perf(eval): measure a sample of symbols, and report resolution honestly
 c014bff  docs: describe the architecture, the model, the interface and the cost
 dc829f2  fix(tools): finish the truncation audit the first pass started
+e1169f5  perf(eval): script the worker-count sweep, and stop citing the withdrawn number
+bb569ae  docs: add the top-level README and the final report
+3ffa9b6  fix(cpp): record the type a declaration names, not what it desugars to
+8c94bf6  fix(tools): count a cut dependency group by its true total
+d8d1713  fix(query): resolve a symbol by its definition, and parse a span
+1d1d167  fix(query): make impact analysis reach beyond calls
+aa30d8f  docs: correct the counts and date the numbers the merge made stale
+e422969  fix(tools): say that a macro's empty answer means "not tracked"
+9a536e9  fix(tools): page the type-edge lookup like every other impact bucket
+e9e027e  docs: link the new limitations list from the README and the final report
 ```
 
 Two features of the history are worth noting because they were deliberate.
