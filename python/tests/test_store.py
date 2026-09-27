@@ -271,5 +271,36 @@ class TestSchemaRejection(StoreCase):
         self.assertEqual(int(row["value"]), 1)
 
 
+class TestPlannerStatistics(StoreCase):
+    """ANALYZE, which is what keeps a lookup from becoming a table scan."""
+
+    def test_a_new_store_has_no_statistics(self):
+        self.assertFalse(self.store.has_statistics())
+
+    def test_analyzing_gives_the_planner_something_to_go_on(self):
+        self.store.analyze()
+        self.assertTrue(self.store.has_statistics())
+
+    def test_analyzing_leaves_the_facts_alone(self):
+        before = self.store.stats()
+        self.store.analyze()
+        self.assertEqual(self.store.stats(), before)
+
+    def test_statistics_track_the_table_they_describe(self):
+        # A count taken from stale statistics is a wrong answer, not a slow
+        # one, so what the planner is told has to match what is in the table.
+        src = self.source()
+        self.store.ingest(tu(
+            src, [(src, False)],
+            symbols=[SymbolFact(usr="a", kind="function"),
+                     SymbolFact(usr="b", kind="function")],
+            edges=[EdgeFact(kind="calls", src="a", dst="b", file=0, line=4)],
+        ))
+        self.store.analyze()
+        row = self.store.connection().execute(
+            "SELECT stat FROM sqlite_stat1 WHERE tbl = 'raw_edge'").fetchone()
+        self.assertEqual(int(row["stat"].split()[0]), self.store.stats()["edges"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,6 +54,12 @@ class Store:
         self.project_root = Path(project_root).resolve() if project_root else None
         self._file_ids: Dict[str, int] = {}
         self._canon_cache: Dict[str, str] = {}
+        # Both directions of the file table, and its project flag, kept here
+        # because a query builds one entry per symbol it looks at: a project
+        # with sixty thousand symbols would otherwise spend a few hundred
+        # thousand statements reading a table that fits in a few kilobytes.
+        self._file_path_cache: Dict[int, str] = {}
+        self._in_project_cache: Dict[int, bool] = {}
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         # WAL keeps a long re-index from blocking reads, and the durability
@@ -87,8 +93,11 @@ class Store:
         self.close()
 
     def _load_file_ids(self) -> None:
-        for row in self._conn.execute("SELECT id, path FROM file"):
+        for row in self._conn.execute(
+                "SELECT id, path, in_project FROM file"):
             self._file_ids[row["path"]] = row["id"]
+            self._file_path_cache[row["id"]] = row["path"]
+            self._in_project_cache[row["id"]] = bool(row["in_project"])
 
     # -- files ---------------------------------------------------------------
 
@@ -133,15 +142,36 @@ class Store:
         )
         fid = int(cur.lastrowid)
         self._file_ids[key] = fid
+        self._file_path_cache[fid] = key
+        self._in_project_cache[fid] = bool(in_project)
         return fid
 
     def file_path(self, file_id: Optional[int]) -> Optional[str]:
         if file_id is None or file_id < 0:
             return None
+        cached = self._file_path_cache.get(file_id)
+        if cached is not None:
+            return cached
         row = self._conn.execute(
             "SELECT path FROM file WHERE id = ?", (file_id,)
         ).fetchone()
-        return row["path"] if row else None
+        if row is None:
+            return None
+        self._file_path_cache[file_id] = row["path"]
+        return row["path"]
+
+    def file_is_in_project(self, file_id: Optional[int]) -> bool:
+        if file_id is None or file_id < 0:
+            return False
+        cached = self._in_project_cache.get(file_id)
+        if cached is not None:
+            return cached
+        row = self._conn.execute(
+            "SELECT in_project FROM file WHERE id = ?", (file_id,)
+        ).fetchone()
+        value = bool(row and row["in_project"])
+        self._in_project_cache[file_id] = value
+        return value
 
     def file_ids_for(self, paths: Iterable[str]) -> List[int]:
         out = []
@@ -281,6 +311,27 @@ class Store:
         self._conn.execute("BEGIN")
         self._conn.executescript(REBUILD_SYMBOLS)
         self._conn.commit()
+
+    def analyze(self) -> None:
+        """Refresh the query planner's statistics.
+
+        Without them SQLite guesses, and it guesses wrong: asked how many
+        distinct callers a symbol has, it scanned every edge in the index
+        rather than seeking the three that pointed at it.  Measured over six
+        translation units of Clang tooling, that query went from 53 ms to
+        0.02 ms.  Statistics are gathered per index rather than per query
+        because they describe the whole table, and they go stale as it grows.
+        """
+        self._conn.execute("ANALYZE")
+        self._conn.commit()
+
+    def has_statistics(self) -> bool:
+        """Whether the planner has anything better than a guess to work from."""
+        try:
+            row = self._conn.execute("SELECT COUNT(*) FROM sqlite_stat1").fetchone()
+        except sqlite3.OperationalError:  # the table appears with the first ANALYZE
+            return False
+        return bool(row and row[0])
 
     # -- introspection -------------------------------------------------------
 

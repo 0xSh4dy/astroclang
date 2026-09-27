@@ -251,6 +251,13 @@ def index_project(root: Path,
 
     if report.indexed:
         store.rebuild_symbols()
+    # Both are cheap next to the extractor run that just finished, and both
+    # describe the index as a whole rather than what changed: the planner's
+    # statistics are rebuilt whenever the index grew, and also when an index
+    # from an older build has none at all, so that re-running this over an
+    # unchanged tree is enough to fix one.
+    if report.indexed or not store.has_statistics():
+        store.analyze()
 
     report.seconds = time.monotonic() - started
     return report

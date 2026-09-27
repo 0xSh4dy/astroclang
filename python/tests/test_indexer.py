@@ -248,6 +248,23 @@ class TestIndexing(ProjectCase):
         report = self.index(only=["a.cpp"])
         self.assertEqual(report.total, 1)
 
+    def test_an_index_run_leaves_usable_planner_statistics(self):
+        # A lookup that becomes a table scan is a slow answer on a small
+        # project and an unusable one on a large project, and the planner only
+        # avoids that if it has statistics - which the run has to gather.
+        self.assertFalse(self.store.has_statistics())
+        self.index()
+        self.assertTrue(self.store.has_statistics())
+
+    def test_an_index_with_nothing_new_still_gathers_them(self):
+        # An index built before statistics were gathered has none, and
+        # re-running over an unchanged tree is how a user would fix it.
+        self.compdb()
+        self.store.connection().execute("DROP TABLE IF EXISTS sqlite_stat1")
+        self.store.connection().commit()
+        self.index()
+        self.assertTrue(self.store.has_statistics())
+
     def test_failure_leaves_the_previous_index_intact(self):
         # A failed run must not replace a complete answer with a partial one.
         self.compdb()

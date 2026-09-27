@@ -62,6 +62,12 @@ class Query:
         self.store = store
         self.conn = store.connection()
         self.root = store.project_root
+        # A file's displayed path, computed once.  `rel` resolves the path
+        # against the root, which is a filesystem call, and one answer can
+        # carry a thousand symbols: without this, listing the callers of a
+        # popular function costs a thousand `realpath`s to print the same
+        # dozen file names.
+        self._rel_cache: Dict[int, str] = {}
 
     # -- naming --------------------------------------------------------------
 
@@ -76,11 +82,20 @@ class Query:
                 return path
         return path
 
+    def rel_of(self, file_id: Optional[int]) -> str:
+        """A file's path relative to the root, worked out once."""
+        if file_id is None:
+            return ""
+        cached = self._rel_cache.get(file_id)
+        if cached is None:
+            cached = self.rel(self.store.file_path(file_id))
+            self._rel_cache[file_id] = cached
+        return cached
+
     def loc(self, file_id: Optional[int], line: Optional[int]) -> str:
         if file_id is None:
             return ""
-        path = self.store.file_path(file_id)
-        name = self.rel(path)
+        name = self.rel_of(file_id)
         return f"{name}:{line}" if line else name
 
     # -- symbol shape --------------------------------------------------------
@@ -109,12 +124,7 @@ class Query:
         return out
 
     def _is_project_file(self, file_id: Optional[int]) -> bool:
-        if file_id is None:
-            return False
-        row = self.conn.execute(
-            "SELECT in_project FROM file WHERE id = ?", (file_id,)
-        ).fetchone()
-        return bool(row and row["in_project"])
+        return self.store.file_is_in_project(file_id)
 
     # -- resolution ----------------------------------------------------------
 
@@ -205,8 +215,8 @@ class Query:
             kind=row["kind"],
             signature=row["signature"] or "",
             location=self.loc(row["file_id"], row["line"]),
-            file=self.rel(self.store.file_path(row["file_id"])),
-            def_file=self.rel(self.store.file_path(row["def_file_id"])),
+            file=self.rel_of(row["file_id"]),
+            def_file=self.rel_of(row["def_file_id"]),
             line=row["line"],
             in_project=self._is_project_file(row["file_id"]),
             stub=bool(row["stub"]),
