@@ -520,5 +520,55 @@ class TestFileIdentity(Corpus):
         self.assertEqual(hits[0]["symbol"], "geo::Circle::area")
 
 
+class TestSourceContext(Corpus):
+    """The region an agent gets instead of the file."""
+
+    def test_the_definition_is_what_comes_back(self):
+        # The declaration is in the header and says nothing; the body is in
+        # the source file.  A reader asking about `area` wants the body.
+        ctx = self.q.source_context("geo::Circle::area", context_lines=2)
+        self.assertTrue(ctx["region"].startswith("src/shapes.cpp:"))
+        self.assertEqual(ctx["declared_at"], "include/shapes.h:39")
+        self.assertIn("3.14159", ctx["source"])
+
+    def test_the_region_is_small(self):
+        whole = len(self.q.source_context("geo::Circle::area",
+                                          context_lines=0)["source"].splitlines())
+        self.assertEqual(whole, 1)
+
+    def test_line_numbers_are_part_of_the_text(self):
+        # The agent's next question is usually about a specific line, and
+        # counting lines in a quoted block is a good way to be off by one.
+        ctx = self.q.source_context("geo::Circle::area", context_lines=1)
+        first = ctx["region"].rsplit(":", 1)[1].split("-")[0]
+        self.assertTrue(ctx["source"].startswith(f"{first}: "))
+
+    def test_a_class_region_covers_its_body(self):
+        ctx = self.q.source_context("geo::Circle", context_lines=0)
+        self.assertIn("class Circle : public Shape {", ctx["source"])
+        self.assertIn("};", ctx["source"])
+
+    def test_an_ambiguous_name_reports_the_alternatives(self):
+        ctx = self.q.source_context("scale")
+        self.assertIn("more than one symbol", ctx["error"])
+        self.assertEqual({c["signature"] for c in ctx["candidates"]},
+                         {"(int)", "(double)", "(double, double)"})
+
+    def test_a_name_that_does_not_exist_is_not_an_error_of_the_tool(self):
+        ctx = self.q.source_context("no_such_symbol_anywhere")
+        self.assertIn("no symbol matching", ctx["error"])
+
+    def test_a_zero_context_request_still_returns_the_whole_symbol(self):
+        # Padding is negotiable; the symbol is not.
+        ctx = self.q.source_context("geo::Tagged", context_lines=0)
+        self.assertIn("class Tagged", ctx["source"])
+        self.assertNotIn("truncated", ctx)
+
+    def test_a_symbol_longer_than_the_cap_is_truncated_and_says_so(self):
+        ctx = self.q.source_context("geo", context_lines=0, max_lines=3)
+        self.assertTrue(ctx["truncated"])
+        self.assertEqual(len(ctx["source"].splitlines()), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

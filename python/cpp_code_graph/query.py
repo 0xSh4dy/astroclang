@@ -44,6 +44,9 @@ class SymbolRef:
     signature: str = ""
     location: str = ""
     file: str = ""
+    # Where the body is, when that is not where the declaration is.  A caller
+    # narrowing a name by file may mean either one.
+    def_file: str = ""
     line: Optional[int] = None
     in_project: bool = True
     stub: bool = False
@@ -198,6 +201,7 @@ class Query:
             signature=row["signature"] or "",
             location=self.loc(row["file_id"], row["line"]),
             file=self.rel(self.store.file_path(row["file_id"])),
+            def_file=self.rel(self.store.file_path(row["def_file_id"])),
             line=row["line"],
             in_project=self._is_project_file(row["file_id"]),
             stub=bool(row["stub"]),
@@ -609,6 +613,166 @@ class Query:
         return self.symbols_in_file(path, include_system=True, kind=kind,
                                     limit=limit)
 
+    # -- source --------------------------------------------------------------
+
+    def source_context(self, reference: str, context_lines: int = 20,
+                       max_lines: int = 200, path: Optional[str] = None
+                       ) -> Dict[str, Any]:
+        """The smallest region of source that answers a question about a symbol.
+
+        The alternative - handing back the file - is what makes an agent read
+        twenty thousand lines to change three, so the region is the symbol's
+        definition where one exists, its declaration otherwise, padded by
+        `context_lines` and clamped to the file.
+
+        The span is not guessed by scanning for braces.  The extractor records
+        the source range of the definition, so the body's first and last lines
+        are already known exactly - padding around a known span is a smaller
+        and more honest computation than re-deriving the span from the text.
+
+        Line numbers are part of the returned text because the agent's next
+        question is usually about a specific line, and counting lines in a
+        quoted block is a good way to be off by one.
+        """
+        usr, failure = self.resolve_one(reference, path)
+        if usr is None:
+            return failure or {"error": f"no symbol matching {reference!r}"}
+        row = self._row(usr)
+        if row is None:  # pragma: no cover - resolve() returns a known USR
+            return {"error": f"no symbol matching {reference!r}"}
+
+        out: Dict[str, Any] = {"symbol": row["qualified"] or row["name"] or usr}
+        if row["kind"]:
+            out["kind"] = row["kind"]
+        declared = self.loc(row["file_id"], row["line"])
+        if declared:
+            out["declared_at"] = declared
+
+        # The definition's span when there is one, the declaration's otherwise.
+        # `end_line` belongs to whichever of the two it was read from, which is
+        # why the two are taken together or not at all.
+        if row["def_file_id"] is not None:
+            file_id, first, last = (row["def_file_id"], row["def_line"],
+                                    row["end_line"] or row["def_line"])
+        else:
+            file_id, first, last = (row["file_id"], row["line"],
+                                    row["end_line"] or row["line"])
+        if file_id is None or not first:
+            return out
+        if row["end_line"] is None and row["kind"] in _CONTAINER_KINDS:
+            last = self._container_end(usr, file_id) or last
+
+        disk = self.store.file_path(file_id)
+        lines = _read_lines(disk)
+        if lines is None:
+            out["error"] = f"cannot read {self.rel(disk)}; re-index if it moved"
+            return out
+        total = len(lines)
+        first, last = max(1, first), max(1, last)
+        if last > total:
+            # The file shrank under a stale index.  Say so rather than quote
+            # whatever now occupies those lines.
+            out["error"] = (f"{self.rel(disk)} has {total} lines; the index "
+                            f"places this symbol at {first}-{last}. Re-index.")
+            return out
+
+        span = last - first + 1
+        if span >= max_lines:
+            start, end, truncated = first, first + max_lines - 1, True
+        else:
+            pad = min(context_lines, max_lines - span)
+            start = max(1, first - pad)
+            end = min(total, last + pad)
+            truncated = False
+
+        out["region"] = f"{self.rel(disk)}:{start}-{end}"
+        out["at"] = f"{self.rel(disk)}:{first}-{last}"
+        out["source"] = "\n".join(
+            f"{n}: {lines[n - 1]}" for n in range(start, end + 1)
+        )
+        if truncated:
+            out["truncated"] = True
+            out["note"] = (f"the symbol runs to line {last}; only the first "
+                           f"{max_lines} lines are shown")
+        return out
+
+    def _container_end(self, usr: str, file_id: int, depth: int = 4
+                       ) -> Optional[int]:
+        """The last line a container occupies, read off what is inside it.
+
+        A namespace carries no end of its own: the extractor records a source
+        range for a definition, and `namespace geo` is a declaration however
+        many braces follow it.  Quoting that one line answers "where does this
+        namespace start" and nothing else.  Its members know where they end,
+        and the last of them closes it for every purpose a reader has.
+        """
+        best: Optional[int] = None
+        rows = self.conn.execute(
+            "SELECT usr, kind, COALESCE(end_line, line) AS e FROM symbol"
+            " WHERE parent_usr = ? AND file_id = ?", (usr, file_id))
+        for r in rows:
+            if r["e"] is not None:
+                best = r["e"] if best is None else max(best, r["e"])
+            # A nested namespace has no end either, so its own extent has to
+            # come from its members in turn.  A class does not, and its
+            # children are inside the range already counted.
+            if depth > 0 and r["kind"] == "namespace":
+                deeper = self._container_end(r["usr"], file_id, depth - 1)
+                if deeper is not None:
+                    best = deeper if best is None else max(best, deeper)
+        return best
+
+    def _candidates(self, reference: str,
+                    path: Optional[str] = None) -> List[SymbolRef]:
+        """What `reference` could mean, narrowed by file when it is given.
+
+        An optional `path` settles the common case: `allocate` names a dozen
+        methods in a large project, but a caller asking about one of them
+        usually knows which file they are looking at.
+        """
+        candidates = self.resolve(reference)
+        if path and len(candidates) > 1:
+            want = self.rel(path)
+            narrowed = [c for c in candidates
+                        if _same_file(c.file, want)
+                        or _same_file(c.def_file, want)]
+            if narrowed:
+                candidates = narrowed
+        return candidates
+
+    def resolve_one(self, reference: str, path: Optional[str] = None
+                    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """A single USR, or the reason there is not one.
+
+        Returns ``(usr, None)`` or ``(None, explanation)``.  Every entry point
+        that takes a symbol name goes through this, so the way an ambiguous
+        name is reported - which is to name the alternatives rather than pick
+        one - is decided in one place.
+        """
+        candidates = self._candidates(reference, path)
+        if not candidates:
+            return None, {"error": f"no symbol matching {reference!r}"}
+        # An exact USR hit is not an ambiguity, even when the substring pass
+        # would also have matched other things.
+        exact = [c for c in candidates if c.usr == reference]
+        if len(exact) == 1:
+            return exact[0].usr, None
+        if len(candidates) == 1:
+            return candidates[0].usr, None
+        return None, {
+            "error": f"{reference!r} names more than one symbol",
+            "candidates": self.ambiguity(reference, path),
+        }
+
+    def ambiguity(self, reference: str, path: Optional[str] = None,
+                  limit: int = 20) -> List[Dict[str, Any]]:
+        """Every symbol `reference` could mean, for a caller to report."""
+        return [
+            {"symbol": c.qualified, "signature": c.signature, "kind": c.kind,
+             "location": c.location}
+            for c in self._candidates(reference, path)[:limit]
+        ]
+
     # -- impact --------------------------------------------------------------
 
     def impact(self, usr: str, depth: int = 3,
@@ -864,6 +1028,9 @@ class Query:
 CALLABLE_KINDS = ("function", "method", "constructor", "destructor",
                   "conversion_function", "function_template")
 
+# Kinds whose extent is their body rather than their first line.
+_CONTAINER_KINDS = ("namespace", "class", "struct")
+
 _IMPACT_NOTE = (
     "direct: the index records this dependency. "
     "indirect: reached through the callers of the direct entries, so the effect "
@@ -875,6 +1042,34 @@ _IMPACT_NOTE = (
 
 def _is_callable(kind: Optional[str]) -> bool:
     return kind in CALLABLE_KINDS
+
+
+def _same_file(a: str, b: str) -> bool:
+    """Whether two reported paths name the same file.
+
+    A caller may name a file in full or by any unambiguous suffix - `pool.cpp`
+    is how someone refers to the one they are looking at - so the comparison
+    accepts a trailing path component match as well as equality.
+    """
+    if not a or not b:
+        return False
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
+
+def _read_lines(path: Optional[str]) -> Optional[List[str]]:
+    """A file's lines, or None when it cannot be read.
+
+    Decoding is lossy on purpose: a source file with a stray byte in a comment
+    is still worth quoting, and refusing to show it would be a worse answer
+    than showing it with one character replaced.
+    """
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read().splitlines()
+    except OSError:
+        return None
 
 
 def _split_location(reference: str) -> Optional[Tuple[str, int]]:
