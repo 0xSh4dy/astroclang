@@ -95,6 +95,11 @@ public:
 
   unsigned fileCount() const { return static_cast<unsigned>(Paths.size()); }
 
+  /// Number of include records written.  Counted here rather than by a caller
+  /// because the preprocessor emits includes and the AST walk emits symbols;
+  /// this is the one place both pass through.
+  unsigned long long includeCount() const { return IncludeCount; }
+
   /// Appends `S` to `Out` as a quoted, escaped JSON string.
   static void writeJsonString(std::string &Out, llvm::StringRef S);
 
@@ -102,6 +107,7 @@ private:
   void flush(std::string &Line);
 
   llvm::raw_ostream &OS;
+  unsigned long long IncludeCount = 0;
   std::vector<std::string> Paths;
   std::vector<char> IsSystem;
   std::unordered_map<std::string, int> PathIds;

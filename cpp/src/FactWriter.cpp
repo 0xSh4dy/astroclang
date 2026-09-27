@@ -251,17 +251,18 @@ void FactWriter::emitEdge(const Edge &E) {
 
 void FactWriter::emitInclude(int FromFile, int ToFile, int Line, bool Angled,
                              llvm::StringRef Spelled) {
-  std::string Line = "{\"t\":\"inc\",\"f\":";
-  Line += std::to_string(FromFile);
-  Line += ",\"b\":";
-  Line += std::to_string(ToFile);
-  Line += ",\"l\":";
-  Line += std::to_string(Line);
-  if (Angled) Line += ",\"ang\":1";
-  Line += ",\"sp\":";
-  writeJsonString(Line, Spelled);
-  Line += '}';
-  flush(Line);
+  std::string Out = "{\"t\":\"inc\",\"f\":";
+  Out += std::to_string(FromFile);
+  Out += ",\"b\":";
+  Out += std::to_string(ToFile);
+  Out += ",\"l\":";
+  Out += std::to_string(Line);
+  if (Angled) Out += ",\"ang\":1";
+  Out += ",\"sp\":";
+  writeJsonString(Out, Spelled);
+  Out += '}';
+  flush(Out);
+  ++IncludeCount;
 }
 
 void FactWriter::emitDiag(llvm::StringRef Severity, int File, int Line, int Col,

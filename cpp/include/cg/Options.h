@@ -45,6 +45,9 @@ struct Options {
   /// Project root, used to classify a file as belonging to the project or not
   /// when no compilation database entry marks it.
   std::string ProjectRoot;
+
+  /// Echo captured diagnostics to stderr as well as into the fact stream.
+  bool Verbose = false;
 };
 
 }  // namespace cg

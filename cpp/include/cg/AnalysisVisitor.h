@@ -33,6 +33,15 @@ public:
   bool TraverseDecl(clang::Decl *D);
   bool TraverseLambdaExpr(clang::LambdaExpr *E);
 
+  // RecursiveASTVisitor generates a separate traversal for each call
+  // expression subclass, so overriding CallExpr alone would only cover plain
+  // calls - `obj.method()` and `a + b` would keep their duplicate edges.
+  bool TraverseCallExpr(clang::CallExpr *E);
+  bool TraverseCXXMemberCallExpr(clang::CXXMemberCallExpr *E);
+  bool TraverseCXXOperatorCallExpr(clang::CXXOperatorCallExpr *E);
+  bool TraverseUserDefinedLiteral(clang::UserDefinedLiteral *E);
+  bool TraverseCUDAKernelCallExpr(clang::CUDAKernelCallExpr *E);
+
   bool VisitCallExpr(clang::CallExpr *E);
   bool VisitCXXConstructExpr(clang::CXXConstructExpr *E);
   bool VisitDeclRefExpr(clang::DeclRefExpr *E);
@@ -42,9 +51,22 @@ public:
   const std::string &current() const { return Current; }
 
 private:
+  /// Marks `E`'s callee as spoken for, runs the base traversal, then restores
+  /// the previous mark.  `Base` is the RecursiveASTVisitor traversal matching
+  /// the concrete expression type.
+  template <typename CallT, typename Fn>
+  bool traverseCall(CallT *E, Fn Base) {
+    const clang::Expr *Saved = Callee;
+    clang::Expr *CalleeExpr = E->getCallee();
+    Callee = CalleeExpr ? CalleeExpr->IgnoreParenImpCasts() : nullptr;
+    bool Ok = Base(E);
+    Callee = Saved;
+    return Ok;
+  }
+
   /// Records a resolved call to `Callee`, including the virtual-dispatch and
   /// instantiation information an impact analysis needs.
-  void recordCall(clang::CallExpr *E, const clang::Decl *Callee);
+  void recordCall(clang::SourceLocation Loc, const clang::Decl *Callee);
 
   /// Emits a `references` edge unless the target is a callable, in which case
   /// the call path owns the relationship.
@@ -52,6 +74,17 @@ private:
 
   Indexer &I;
   std::string Current;
+
+  /// The callee sub-expression of the call currently being traversed.
+  ///
+  /// A call's callee is reached twice: once as the target of `calls` from
+  /// VisitCallExpr, and again as an ordinary expression when the traversal
+  /// descends into it.  Without this, every direct call would also be recorded
+  /// as a reference.  Tracking the expression rather than suppressing all
+  /// function references is what lets an address-taken function - `apply(add,
+  /// 3, 4)` - still be recorded, since there the name is *not* a callee and its
+  /// address genuinely escapes.
+  const clang::Expr *Callee = nullptr;
 };
 
 }  // namespace cg

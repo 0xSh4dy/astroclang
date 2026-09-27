@@ -90,12 +90,6 @@ public:
 
   // -- misc ----------------------------------------------------------------
 
-  void emitInclude(int FromFile, int ToFile, int Line, bool Angled,
-                   llvm::StringRef Spelled);
-  void emitDiag(llvm::StringRef Severity, clang::SourceLocation Loc,
-                const std::string &Message);
-  void emitMeta(llvm::StringRef Key, llvm::StringRef Value);
-
   /// Locations of `D` as (file id, line, column), or (-1, 0, 0).
   struct Loc {
     int File = -1;
@@ -112,7 +106,6 @@ public:
   struct Stats {
     unsigned long long Symbols = 0;
     unsigned long long Edges = 0;
-    unsigned long long Includes = 0;
     unsigned long long TypeEdges = 0;
     unsigned long long UnresolvedCalls = 0;
     unsigned long long SyntheticIDs = 0;
@@ -151,6 +144,12 @@ private:
   std::unordered_set<std::string> StubNodes;
   /// Redeclaration chains already collapsed onto one canonical Decl.
   std::unordered_map<std::string, const clang::Decl *> CanonicalDecl;
+  /// USRs whose containment/type/inheritance/override edges are already out.
+  /// A header reached through several redeclarations would otherwise emit the
+  /// same relationships repeatedly.
+  std::unordered_set<std::string> ExtrasDone;
+  /// USRs already linked back to the template they instantiate.
+  std::unordered_set<std::string> PatternLinked;
 
   struct EdgeKey {
     std::string Kind, Src, Dst;

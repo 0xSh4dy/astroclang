@@ -12,13 +12,10 @@
 set(CCG_SOURCES
   src/main.cpp
   src/FactWriter.cpp
-  src/FileTable.cpp
-  src/SymbolEmitter.cpp
+  src/Indexer.cpp
   src/AnalysisVisitor.cpp
   src/AnalysisAction.cpp
-  src/CompileCommandRunner.cpp
   src/CompilationDatabaseFactory.cpp
-  src/Options.cpp
 )
 
 add_executable(cg-index ${CCG_SOURCES})
@@ -31,6 +28,13 @@ target_include_directories(cg-index
     ${CLANG_INCLUDE_DIRS})
 
 target_compile_definitions(cg-index PRIVATE ${LLVM_DEFINITIONS})
+
+# LLVM 16/17 headers rely on <cstdint> being pulled in transitively, which
+# libstdc++ 13 and newer no longer do (GCC 15 fails with "uint64_t was not
+# declared in this scope" inside SmallVector.h).  Including it up front is
+# harmless everywhere and avoids patching or forking Clang's headers.
+target_compile_options(cg-index PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:-include;cstdint>)
 
 target_link_libraries(cg-index
   PRIVATE

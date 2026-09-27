@@ -5,6 +5,8 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclFriend.h"
+#include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
@@ -20,18 +22,32 @@ namespace {
 
 const std::string kEmpty;
 
+/// A template and the declaration it templates describe a single entity: the
+/// USR is generated for the templated declaration, so every other fact about
+/// the node has to come from it too.  Mixing the two produces a node whose
+/// identity names a function while its flags were read off a template
+/// declaration, which is never a definition - so the body would go unrecorded.
+const Decl *templatedDeclOf(const Decl *D) {
+  if (const auto *CTD = dyn_cast<ClassTemplateDecl>(D))
+    return CTD->getTemplatedDecl();
+  if (const auto *FTD = dyn_cast<FunctionTemplateDecl>(D))
+    return FTD->getTemplatedDecl();
+  if (const auto *VTD = dyn_cast<VarTemplateDecl>(D))
+    return VTD->getTemplatedDecl();
+  if (const auto *ATD = dyn_cast<TypeAliasTemplateDecl>(D))
+    return ATD->getTemplatedDecl();
+  return D;
+}
+
 /// The definition of `D` when one is reachable from this redeclaration, else
 /// nullptr.  Clang exposes this per declaration kind rather than on Decl, so
 /// the kinds that can have a body are enumerated here.
 const Decl *definitionOf(const Decl *D) {
+  D = templatedDeclOf(D);
   if (auto *TD = dyn_cast<TagDecl>(D)) return TD->getDefinition();
   if (auto *FD = dyn_cast<FunctionDecl>(D)) return FD->getDefinition();
   if (auto *VD = dyn_cast<VarDecl>(D)) return VD->getDefinition();
   if (auto *ED = dyn_cast<EnumDecl>(D)) return ED->getDefinition();
-  if (auto *CTD = dyn_cast<ClassTemplateDecl>(D))
-    return definitionOf(CTD->getTemplatedDecl());
-  if (auto *FTD = dyn_cast<FunctionTemplateDecl>(D))
-    return definitionOf(FTD->getTemplatedDecl());
   return nullptr;
 }
 
@@ -73,10 +89,6 @@ const Decl *instantiationPattern(const Decl *D) {
   if (auto *VD = dyn_cast<VarDecl>(D))
     return VD->getTemplateInstantiationPattern();
   return nullptr;
-}
-
-bool isCallable(const Decl *D) {
-  return isa<FunctionDecl>(D) || isa<FunctionTemplateDecl>(D);
 }
 
 /// Declaration kinds that exist in every project and would otherwise flood the
@@ -141,8 +153,12 @@ size_t Indexer::EdgeKeyHash::operator()(const EdgeKey &K) const {
 // ---------------------------------------------------------------------------
 
 std::string Indexer::computeUSR(const Decl *D) {
+  // Normalising here means a visitor that reaches both a template and its
+  // templated declaration produces one node rather than two.
+  const Decl *Target = templatedDeclOf(D);
+
   llvm::SmallString<160> Buf;
-  if (index::generateUSRForDecl(D, Buf)) return std::string();
+  if (index::generateUSRForDecl(Target, Buf)) return std::string();
   return std::string(Buf.str());
 }
 
@@ -186,9 +202,12 @@ const std::string *Indexer::usrOf(const Decl *D) {
 const std::string &Indexer::usrOrSynthetic(const Decl *D) {
   if (const std::string *U = usrOf(D)) return *U;
   const Decl *Canon = D->getCanonicalDecl();
+  // usrOf() caches the *failure* as an empty string, so a hit here does not
+  // mean a usable identity was found.
   auto It = USRCache.find(Canon);
-  if (It == USRCache.end()) {
-    It = USRCache.emplace(Canon, computeSyntheticUSR(D)).first;
+  if (It == USRCache.end()) It = USRCache.emplace(Canon, std::string()).first;
+  if (It->second.empty()) {
+    It->second = computeSyntheticUSR(D);
     ++St.SyntheticIDs;
   }
   return It->second;
@@ -249,6 +268,13 @@ bool Indexer::isInSystemHeader(const Decl *D) const {
 std::string Indexer::accessOf(const Decl *D) const {
   const auto *ND = dyn_cast<NamedDecl>(D);
   if (!ND) return {};
+  // Only class members have an access level.  Clang reports one for template
+  // parameters and parameters too, inherited from the surrounding declaration,
+  // and recording it would make `access` mean "some enclosing scope" instead of
+  // what a reader expects: how this member is reached.
+  if (isa<ParmVarDecl>(D) || isa<TemplateTypeParmDecl>(D) ||
+      isa<NonTypeTemplateParmDecl>(D) || isa<TemplateTemplateParmDecl>(D))
+    return {};
   switch (ND->getAccess()) {
     case AS_public: return "pub";
     case AS_protected: return "prot";
@@ -287,13 +313,13 @@ bool Indexer::shouldTraverseInto(const Decl *D) const {
   if (!D) return false;
   if (isa<TranslationUnitDecl>(D) || isTransparent(D)) return true;
   // A system header's inline bodies describe the standard library, not the
-  // project; resolving references *to* them is still handled by reference().
-  if (!Opts.IndexSystemHeaders && isInSystemHeader(D)) {
-    if (!isa<NamespaceDecl>(D) && !isa<ClassTemplateDecl>(D) &&
-        !isa<ClassTemplateSpecializationDecl>(D)) {
-      return false;
-    }
-  }
+  // project.  Descending into `std::vector<T>` to walk every member of every
+  // instantiation buries a project's own code under the standard library and
+  // costs most of the index time.  References *to* those declarations are
+  // still resolved by reference(), which is what a query actually needs: the
+  // caller wants to know that `v.resize(3)` reaches `std::vector<int>::resize`,
+  // not to read that method's body.
+  if (!Opts.IndexSystemHeaders && isInSystemHeader(D)) return false;
   return true;
 }
 
@@ -322,10 +348,16 @@ std::string Indexer::buildFlags(const Decl *D) const {
   if (const auto *RD = dyn_cast<RecordDecl>(D)) {
     Add("anon", RD->isAnonymousStructOrUnion());
     if (const auto *CXX = dyn_cast<CXXRecordDecl>(D)) {
-      Add("abstract", CXX->isAbstract());
+      // Whether a class is abstract or polymorphic is a property of its
+      // definition.  A forward declaration has no answer, and Clang asserts
+      // rather than inventing one, so the flag is left off.  "Not stated" is
+      // the honest result; "not abstract" would be a claim the AST cannot back.
+      if (CXX->hasDefinition()) {
+        Add("abstract", CXX->isAbstract());
+        Add("polymorphic", CXX->isPolymorphic());
+      }
       Add("lambda", CXX->isLambda());
       Add("union", CXX->isUnion());
-      Add("polymorphic", CXX->isPolymorphic());
     }
   }
 
@@ -338,7 +370,7 @@ std::string Indexer::buildFlags(const Decl *D) const {
     Add("extern_c", FD->isExternC());
     if (const auto *MD = dyn_cast<CXXMethodDecl>(D)) {
       Add("virtual", MD->isVirtual());
-      Add("pure", MD->isPureVirtual());
+      Add("pure", MD->isPure());
       Add("static", MD->isStatic());
       Add("const", MD->isConst());
       // A method that overrides something is exactly the set impact analysis
@@ -390,14 +422,14 @@ std::string Indexer::signatureOf(const Decl *D) const {
   std::string Out = "(";
   bool First = true;
   unsigned Count = 0;
-  for (QualType PT : FD->getParamTypes()) {
+  for (const ParmVarDecl *P : FD->parameters()) {
     if (Count++ >= Opts.MaxRecordedParams) {
       Out += ", ...";
       break;
     }
     if (!First) Out += ", ";
     First = false;
-    Out += PT.getAsString(PP);
+    Out += P->getType().getAsString(PP);
   }
   // A single unnamed `void` parameter reads better as an empty list, matching
   // how the declaration is normally written in C.
@@ -457,10 +489,10 @@ FactWriter::Symbol Indexer::buildSymbol(const Decl *D,
   S.Signature = signatureOf(D);
   S.TypeText = typeTextOf(D);
 
-  Loc Decl = locOf(D->getLocation());
-  S.File = Decl.File;
-  S.Line = Decl.Line;
-  S.Col = Decl.Col;
+  Loc DeclLoc = locOf(D->getLocation());
+  S.File = DeclLoc.File;
+  S.Line = DeclLoc.Line;
+  S.Col = DeclLoc.Col;
 
   // The definition may live in a different file than the declaration, and the
   // node is more useful pointing at the definition.
@@ -488,7 +520,8 @@ FactWriter::Symbol Indexer::buildSymbol(const Decl *D,
 // Node emission
 // ---------------------------------------------------------------------------
 
-const std::string &Indexer::emitNode(const Decl *D, bool Full) {
+const std::string &Indexer::emitNode(const Decl *Original, bool Full) {
+  const Decl *D = templatedDeclOf(Original);
   const std::string &U = usrOrSynthetic(D);
   if (U.empty()) return kEmpty;
 
@@ -505,12 +538,93 @@ const std::string &Indexer::emitNode(const Decl *D, bool Full) {
     StubNodes.insert(U);
   }
   if (!CanonicalDecl.count(U)) CanonicalDecl.emplace(U, D->getCanonicalDecl());
+
+  // An implicit instantiation is a distinct entity from its template, but a
+  // query about the template should also reach the instantiations. Recording
+  // the link once per symbol (rather than once per call site) keeps the edge
+  // count proportional to the code, not to how often it runs.
+  if (PatternLinked.insert(U).second) {
+    if (const Decl *Pat = instantiationPattern(D)) {
+      const std::string &PatUSR = reference(Pat);
+      if (!PatUSR.empty() && PatUSR != U) addEdge("specializes", U, PatUSR, D->getLocation());
+    }
+  }
   return U;
 }
 
 const std::string &Indexer::declare(const Decl *D) {
   if (!isIndexableDecl(D)) return kEmpty;
-  return emitNode(D, true);
+  const std::string &U = emitNode(D, true);
+  if (U.empty() || !ExtrasDone.insert(U).second) return U;
+
+  // Templates and their templated declarations share an identity but not a
+  // class; work from whichever one actually carries the structure.
+  const Decl *SD = templatedDeclOf(D);
+
+  const std::string Parent = parentUSROf(D);
+  if (!Parent.empty()) addEdge("contains", Parent, U, D->getLocation());
+
+  // -- declared types ------------------------------------------------------
+  if (const auto *FD = dyn_cast<FunctionDecl>(SD)) {
+    addTypeEdges(U, FD->getReturnType(), "returns", FD->getLocation());
+    unsigned Count = 0;
+    for (const ParmVarDecl *P : FD->parameters()) {
+      if (Count++ >= Opts.MaxRecordedParams) break;
+      addTypeEdges(U, P->getType(), "param_type", P->getLocation());
+    }
+  } else if (const auto *TD = dyn_cast<TypedefNameDecl>(SD)) {
+    addTypeEdges(U, TD->getUnderlyingType(), "aliases", TD->getLocation());
+  } else if (const auto *VD = dyn_cast<ValueDecl>(SD)) {
+    // Fields and globals both tell a reader what type a name holds; the kinds
+    // differ so a query can ask for one without the other.
+    const llvm::StringRef Kind = isa<FieldDecl>(SD) ? "field_type" : "var_type";
+    addTypeEdges(U, VD->getType(), Kind, SD->getLocation());
+  }
+
+  // -- inheritance ---------------------------------------------------------
+  // Base clauses are held in the definition data.  A class that was only
+  // forward-declared in this translation unit has none to read - and a
+  // declaration written *with* a base clause does have them, which is why the
+  // test is hasDefinition() and not isCompleteDefinition().
+  const auto *CXX = dyn_cast<CXXRecordDecl>(SD);
+  if (CXX && CXX->hasDefinition()) {
+    for (const CXXBaseSpecifier &B : CXX->bases()) {
+      // Dependent bases (`template<class T> struct D : T`) have no record to
+      // point at until instantiation; there is nothing honest to record.
+      const CXXRecordDecl *Base = B.getType()->getAsCXXRecordDecl();
+      if (!Base) continue;
+      const std::string &BaseUSR = reference(Base);
+      if (BaseUSR.empty() || BaseUSR == U) continue;
+
+      std::string Flags = "\"acc\":\"";
+      switch (B.getAccessSpecifier()) {
+        case AS_public: Flags += "pub"; break;
+        case AS_protected: Flags += "prot"; break;
+        case AS_private: Flags += "priv"; break;
+        case AS_none: Flags += "none"; break;
+      }
+      Flags += '"';
+      if (B.isVirtual()) Flags += ",\"virtual\":1";
+      if (B.isPackExpansion()) Flags += ",\"pack\":1";
+      addEdge("inherits", U, BaseUSR, B.getBaseTypeLoc(), Flags);
+
+      // `class D : public Base<int>` derives from the instantiation, but a
+      // reader asking "what derives from Base" means the template.
+      if (const Decl *Pat = instantiationPattern(Base))
+        addEdge("instantiates", U, reference(Pat), B.getBaseTypeLoc());
+    }
+  }
+
+  // -- virtual overrides ---------------------------------------------------
+  if (const auto *MD = dyn_cast<CXXMethodDecl>(SD)) {
+    for (const CXXMethodDecl *OM : MD->overridden_methods()) {
+      const std::string &OvrUSR = reference(OM);
+      if (!OvrUSR.empty() && OvrUSR != U)
+        addEdge("overrides", U, OvrUSR, MD->getLocation());
+    }
+  }
+
+  return U;
 }
 
 const std::string &Indexer::reference(const Decl *D) {
@@ -674,22 +788,5 @@ void Indexer::addTypeEdgesImpl(const std::string &SrcUSR, QualType T,
 // ---------------------------------------------------------------------------
 // Diagnostics and metadata
 // ---------------------------------------------------------------------------
-
-void Indexer::emitInclude(int FromFile, int ToFile, int Line, bool Angled,
-                          llvm::StringRef Spelled) {
-  if (FromFile < 0 || ToFile < 0) return;
-  W.emitInclude(FromFile, ToFile, Line, Angled, Spelled);
-  ++St.Includes;
-}
-
-void Indexer::emitDiag(llvm::StringRef Severity, SourceLocation L,
-                       const std::string &Message) {
-  Loc Where = locOf(L);
-  W.emitDiag(Severity, Where.File, Where.Line, Where.Col, Message);
-}
-
-void Indexer::emitMeta(llvm::StringRef Key, llvm::StringRef Value) {
-  W.emitMeta(Key, Value);
-}
 
 }  // namespace cg

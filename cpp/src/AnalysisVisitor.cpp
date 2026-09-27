@@ -15,13 +15,13 @@ namespace cg {
 bool AnalysisVisitor::TraverseDecl(Decl *D) {
   if (!D) return true;
 
-  // Declarations we are not indexing still need a node if something refers to
-  // them, but walking their contents would describe the standard library
-  // rather than the project.
-  if (!I.shouldTraverseInto(D)) {
-    I.reference(D);
-    return true;
-  }
+  // Skipping a subtree must not materialize a node for its root.  Every header
+  // a translation unit includes contributes thousands of top-level
+  // declarations, and none of them is part of the project.  A declaration that
+  // is genuinely referenced becomes a node through reference() at the point of
+  // use, which is both cheaper and more accurate: it records that something in
+  // the project depends on it.
+  if (!I.shouldTraverseInto(D)) return true;
 
   bool Pushed = false;
   std::string Saved;
@@ -58,7 +58,7 @@ bool AnalysisVisitor::TraverseLambdaExpr(LambdaExpr *E) {
 // Calls
 // ---------------------------------------------------------------------------
 
-void AnalysisVisitor::recordCall(CallExpr *E, const Decl *Callee) {
+void AnalysisVisitor::recordCall(SourceLocation Loc, const Decl *Callee) {
   if (Current.empty() || !Callee) return;
 
   std::string Flags;
@@ -69,7 +69,7 @@ void AnalysisVisitor::recordCall(CallExpr *E, const Decl *Callee) {
     // certain.
     if (MD->isVirtual()) {
       Flags = "\"virt\":1";
-      if (MD->isPureVirtual()) Flags += ",\"pure\":1";
+      if (MD->isPure()) Flags += ",\"pure\":1";
     }
   }
 
@@ -78,12 +78,47 @@ void AnalysisVisitor::recordCall(CallExpr *E, const Decl *Callee) {
   // The edge points at the exact overload that overload resolution selected.
   // Linking that target back to its template pattern happens once per symbol
   // in Indexer::emitNode, not once per call site.
-  I.addEdge("calls", Current, Target, E->getBeginLoc(), Flags);
+  I.addEdge("calls", Current, Target, Loc, Flags);
+}
+
+bool AnalysisVisitor::TraverseCallExpr(CallExpr *E) {
+  if (!E) return true;
+  return traverseCall(E, [this](CallExpr *X) {
+    return RecursiveASTVisitor::TraverseCallExpr(X);
+  });
+}
+
+bool AnalysisVisitor::TraverseCXXMemberCallExpr(CXXMemberCallExpr *E) {
+  if (!E) return true;
+  return traverseCall(E, [this](CXXMemberCallExpr *X) {
+    return RecursiveASTVisitor::TraverseCXXMemberCallExpr(X);
+  });
+}
+
+bool AnalysisVisitor::TraverseCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
+  if (!E) return true;
+  return traverseCall(E, [this](CXXOperatorCallExpr *X) {
+    return RecursiveASTVisitor::TraverseCXXOperatorCallExpr(X);
+  });
+}
+
+bool AnalysisVisitor::TraverseUserDefinedLiteral(UserDefinedLiteral *E) {
+  if (!E) return true;
+  return traverseCall(E, [this](UserDefinedLiteral *X) {
+    return RecursiveASTVisitor::TraverseUserDefinedLiteral(X);
+  });
+}
+
+bool AnalysisVisitor::TraverseCUDAKernelCallExpr(CUDAKernelCallExpr *E) {
+  if (!E) return true;
+  return traverseCall(E, [this](CUDAKernelCallExpr *X) {
+    return RecursiveASTVisitor::TraverseCUDAKernelCallExpr(X);
+  });
 }
 
 bool AnalysisVisitor::VisitCallExpr(CallExpr *E) {
-  if (const FunctionDecl *Callee = E->getDirectCallee()) {
-    recordCall(E, Callee);
+  if (const FunctionDecl *Direct = E->getDirectCallee()) {
+    recordCall(E->getBeginLoc(), Direct);
     return true;
   }
 
@@ -111,7 +146,8 @@ bool AnalysisVisitor::VisitCallExpr(CallExpr *E) {
 }
 
 bool AnalysisVisitor::VisitCXXConstructExpr(CXXConstructExpr *E) {
-  if (CXXConstructorDecl *Ctor = E->getConstructor()) recordCall(E, Ctor);
+  if (CXXConstructorDecl *Ctor = E->getConstructor())
+    recordCall(E->getBeginLoc(), Ctor);
   return true;
 }
 
@@ -121,8 +157,18 @@ bool AnalysisVisitor::VisitCXXConstructExpr(CXXConstructExpr *E) {
 
 void AnalysisVisitor::recordReference(const ValueDecl *D, SourceLocation Loc) {
   if (Current.empty() || !D) return;
-  // Calls already carry the relationship for callables.
-  if (isa<FunctionDecl>(D)) return;
+
+  // A callable reached as anything other than the callee of this call has had
+  // its address taken - `apply(add, 3, 4)`, `auto f = &Foo::bar;`.  No `calls`
+  // edge will ever be recorded for it, because which function runs is decided
+  // at run time.  Dropping it would leave the function with no incoming edge at
+  // all, and impact analysis silently blind to it; recording a reference marks
+  // it as reachable without overstating that it is called.
+  if (isa<FunctionDecl>(D) || isa<FunctionTemplateDecl>(D)) {
+    const std::string &Target = I.reference(D);
+    if (!Target.empty()) I.addEdge("references", Current, Target, Loc);
+    return;
+  }
 
   // Function-local entities would drag every local variable into the graph;
   // they are only recorded when the caller asked for locals.
@@ -139,12 +185,17 @@ void AnalysisVisitor::recordReference(const ValueDecl *D, SourceLocation Loc) {
 }
 
 bool AnalysisVisitor::VisitDeclRefExpr(DeclRefExpr *E) {
+  // The callee of the enclosing call already produced a `calls` edge.
+  if (static_cast<const Expr *>(E) == Callee) return true;
   recordReference(E->getDecl(), E->getBeginLoc());
   return true;
 }
 
 bool AnalysisVisitor::VisitMemberExpr(MemberExpr *E) {
-  recordReference(E->getMemberDecl(), E->getBeginLoc());
+  // Only the member itself is skipped for `obj.method()`; the traversal still
+  // descends into the base expression, so `obj` is recorded as referenced.
+  if (static_cast<const Expr *>(E) != Callee)
+    recordReference(E->getMemberDecl(), E->getBeginLoc());
   return true;
 }
 
