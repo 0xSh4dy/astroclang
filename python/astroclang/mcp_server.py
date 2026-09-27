@@ -227,15 +227,21 @@ class Server:
         return True
 
 
-def open_index(db_path, root=None, missing: str = "") -> Server:
-    """A server for an existing index, or one that explains its absence."""
+def open_index(db_path, root=None, missing: str = "", log=None) -> Server:
+    """A server for an existing index, or one that explains its absence.
+
+    `log` is where an unexpected exception goes on its way out.  It is passed
+    through rather than defaulted here because the server never writes to
+    stderr itself: stdout is the protocol, and a library that decided on its
+    own where a diagnostic belongs would have made that choice for its host.
+    """
     path = Path(db_path)
     if not path.is_file():
         return Server(missing=missing or (
             f"there is no index at {path}; build one with "
-            f"`astroclang index`"))
+            f"`astroclang index`"), log=log)
     store = Store(path, project_root=Path(root) if root else None)
-    return Server(query=Query(store), store=store)
+    return Server(query=Query(store), store=store, log=log)
 
 
 def serve_stdio(server: Server) -> int:

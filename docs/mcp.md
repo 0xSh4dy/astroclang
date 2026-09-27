@@ -549,6 +549,16 @@ which is where the token argument for this tool comes from.
 
 ### Using it from a client
 
+The server speaks JSON-RPC on stdin and stdout, so anything that can spawn a
+process and write to its stdin can drive it. The quickest way to see what it
+exposes is MCP Inspector, which starts it and lists the tools:
+
+```sh
+npx @modelcontextprotocol/inspector astroclang mcp /path/to/project
+```
+
+A host that keeps a config file wants the same command written down:
+
 ```json
 {"mcpServers": {"astroclang": {
   "command": "astroclang",
@@ -556,6 +566,25 @@ which is where the token argument for this tool comes from.
 }}}
 ```
 
-Nothing is written to stdout except protocol messages, and diagnostics go to
-stderr, so a client's log capture sees the server's own warnings and nothing
-else.
+Claude Code registers it from the command line:
+
+```sh
+claude mcp add astroclang -- astroclang mcp /path/to/project
+```
+
+If the extractor is neither on `PATH` nor in a build tree beside the package,
+say where it is. Indexing needs it; querying an existing index does not:
+
+```json
+{"mcpServers": {"astroclang": {
+  "command": "astroclang",
+  "args": ["mcp", "/path/to/project"],
+  "env": {"ASTROCLANG_INDEX": "/path/to/build/cpp/astroclang-index"}
+}}}
+```
+
+Nothing is written to stdout except protocol messages. Everything else goes to
+stderr — the lines naming the index it opened, and any exception raised while
+answering a request — because that is where a host's log capture looks. It is
+also why `astroclang mcp` run by hand prints a few lines and then appears to do
+nothing: it is waiting for a client on stdin.

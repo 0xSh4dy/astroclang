@@ -262,6 +262,36 @@ class TestMcpCommand(CliCase):
         answer = json.loads(replies[1]["result"]["content"][0]["text"])
         self.assertEqual(answer["callers"][0]["symbol"], "run")
 
+    def serve(self, *argv):
+        """Run `mcp` to completion with no client on the other end."""
+        stdin = sys.stdin
+        try:
+            sys.stdin = io.StringIO("")
+            return run([*argv])
+        finally:
+            sys.stdin = stdin
+
+    def test_serving_says_so_on_stderr_before_it_waits(self):
+        # stdout is the protocol channel, so stderr is the only place a person
+        # running this by hand can see that the server came up at all.  It
+        # used to print nothing anywhere, which reads as a hang - and the
+        # documentation already promised diagnostics on stderr.
+        status, out, err = self.serve("--db", str(self.db), "mcp", str(self.root))
+        self.assertEqual(status, cli.OK)
+        self.assertEqual(out, "", "a banner on stdout would corrupt the stream")
+        self.assertIn("tools, index", err)
+        self.assertIn(str(self.db), err)
+
+    def test_a_missing_index_is_announced_rather_than_served_silently(self):
+        # The server deliberately starts without an index so a client can be
+        # told why its calls fail.  Saying so only in a reply to a call that
+        # may never come is the same failure as saying nothing.
+        empty = self.root / "unindexed"
+        empty.mkdir()
+        status, _, err = self.serve("mcp", str(empty))
+        self.assertEqual(status, cli.OK)
+        self.assertIn("there is no index", err)
+
 
 @unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestInARealProcess(RepoCase):

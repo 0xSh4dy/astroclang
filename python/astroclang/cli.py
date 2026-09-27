@@ -401,6 +401,26 @@ def _report_indexing(report, db: Path, quiet: bool) -> None:
                   f"missing")
 
 
+def _announce_mcp(db: Path, root: Path, server) -> None:
+    """Say on stderr what is about to be served, before the protocol starts.
+
+    stdout carries protocol frames and nothing else, so without this a person
+    who runs `astroclang mcp` by hand sees a terminal that never prints
+    anything at all and cannot tell a working server from a hang.  The same
+    lines land in a client's log capture, which is where they are wanted when
+    the server is spawned rather than typed.
+    """
+    if server.missing:
+        _progress(f"{PROGRAM} mcp: {server.missing}")
+        _progress(f"{PROGRAM} mcp: serving anyway, so a client is told why its "
+                  f"calls fail instead of finding a process that died")
+    else:
+        _progress(f"{PROGRAM} mcp: {len(tools.describe())} tools, index {db}")
+        _progress(f"{PROGRAM} mcp: root {root}")
+    _progress(f"{PROGRAM} mcp: JSON-RPC on stdin/stdout, diagnostics here on "
+              f"stderr; waiting for a client")
+
+
 def cmd_mcp(args) -> int:
     if args.list_tools:
         json.dump(tools.describe(), sys.stdout, indent=2, ensure_ascii=False)
@@ -408,7 +428,12 @@ def cmd_mcp(args) -> int:
         return OK
     db = _db_path(args)
     root = _project_root(db, Path(args.root or ".").resolve())
-    return serve_stdio(open_index(db, root=root))
+    # `_progress` is also the server's log sink, so an exception raised while
+    # answering a request leaves a trace on stderr instead of vanishing into
+    # an error reply the client may never show anyone.
+    server = open_index(db, root=root, log=_progress)
+    _announce_mcp(db, root, server)
+    return serve_stdio(server)
 
 
 def cmd_query(args) -> int:

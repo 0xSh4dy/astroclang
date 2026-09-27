@@ -77,6 +77,18 @@ class WithoutAnIndex(unittest.TestCase):
         out = ask(server, "tools/call", {"name": "get_index_status"})
         self.assertIn("astroclang index", payload(out)["hint"])
 
+    def test_the_log_sink_is_carried_into_the_server(self):
+        # The server has always accepted a sink for exceptions raised while
+        # answering, and `open_index` - the only thing that builds the server
+        # the CLI serves - dropped it on the way through, so it was never
+        # anything but dead code.  An error then reached the client's reply
+        # and no one else.
+        seen = []
+        server = open_index(Path("/nonexistent/index.db"), log=seen.append)
+        self.assertIsNotNone(server.log)
+        server.log("boom")
+        self.assertEqual(seen, ["boom"])
+
 
 class TestHandshake(WithoutAnIndex):
     def test_a_supported_version_is_echoed_back(self):
