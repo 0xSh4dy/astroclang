@@ -314,14 +314,14 @@ over an unseen file would otherwise appear to have changed nothing at all.
 
 ## 8. Tests
 
-**322 tests** across nine files, all of which run without a compiler except the
+**333 tests** across nine files, all of which run without a compiler except the
 semantic ones, which drive the real extractor over a C and C++ corpus.
 
 | File | Tests | What it holds down |
 | --- | ---: | --- |
 | `test_semantics.py` | 78 | semantic resolution, over the corpus, through the real extractor |
-| `test_tools.py` | 62 | the answer shape: cuts, refusals, and notes |
-| `test_query.py` | 50 | the graph: traversal, folding, scoping |
+| `test_tools.py` | 71 | the answer shape: cuts, refusals, and notes |
+| `test_query.py` | 52 | the graph: traversal, folding, scoping |
 | `test_cli.py` | 28 | the command line |
 | `test_indexer.py` | 28 | discovery, planning, incremental update |
 | `test_mcp.py` | 27 | the protocol: framing, schemas, errors |
@@ -329,8 +329,8 @@ semantic ones, which drive the real extractor over a C and C++ corpus.
 | `test_changes.py` | 16 | diff → symbols → impact, against real git repositories |
 | `test_facts.py` | 12 | the fact-stream format |
 
-Counted by the loader rather than by `grep def test`: 316 distinct method names,
-six of which are used twice, for 322 collected tests. Four of those six are the
+Counted by the loader rather than by `grep def test`: 327 distinct method names,
+six of which are used twice, for 333 collected tests. Four of those six are the
 same protocol behaviour asserted twice in `test_mcp.py` — once with an index and
 once without one, which is a difference worth two tests rather than one. An
 earlier draft of this table said 318 and summed to 318; that was `grep`'s count,
@@ -503,6 +503,24 @@ f9d29cb docs: add the final report
 The list ends at `798e40e`. The two commits after it corrected this section —
 the count, and then this paragraph — and they are not in the list for the
 obvious reason: a list of commits cannot contain the commit that writes it.
+
+A second line of work ran alongside this one and met it in a merge. It was
+working the same failure from the other side — the same truncation audit, in
+the same tools — so its four code commits are more of the story above rather
+than a separate one:
+
+```
+dc829f2 fix(tools): finish the truncation audit the first pass started
+d8d1713 fix(query): resolve a symbol by its definition, and parse a span
+e1169f5 perf(eval): script the worker-count sweep, and stop citing the withdrawn number
+9a536e9 fix(tools): page the type-edge lookup like every other impact bucket
+0edd2ea Merge master into worktree-paging-audit
+```
+
+That line also wrote a README and a final report of its own, and corrected
+their counts, in four further commits. The merge resolved every document both
+lines touched in favour of this one — the copy whose numbers were measured
+last — so those four are superseded rather than lost.
 
 An earlier draft said twenty-nine commits. That was true when it was drafted and
 false by the time it was committed, which is the same failure as every other
