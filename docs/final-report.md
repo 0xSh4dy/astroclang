@@ -455,7 +455,7 @@ Summarized here; [`limitations.md`](limitations.md) is the full account.
 
 ## 11. Git history
 
-Thirty-three commits, each a working checkpoint: the build passes and the tests
+Thirty-five commits, each a working checkpoint: the build passes and the tests
 that existed at that point pass. The order is the order the work actually
 happened, including the corrections.
 
@@ -493,7 +493,14 @@ e422969 fix(tools): say that a macro's empty answer means "not tracked"
 ccda648 docs(eval): re-run the evaluation after the type-edge fix
 25129b7 docs: correct the scaling and cache claims that quoted it
 f9d29cb docs: add the final report
+798e40e docs: fix the commit count and the claims that drifted from it
 ```
+
+The list ends at `798e40e`. The thirty-fifth commit is the one that put this
+paragraph here, and it is not in the list for the obvious reason: a list of
+commits cannot contain the commit that writes it. The count above is thirty-five
+for the same reason, and it is the only number in this document that had to be
+written after it was known.
 
 The last nine are the ones worth reading, and they are two halves of one story.
 The first four of them fixed a feature that was **silently producing nothing** —
