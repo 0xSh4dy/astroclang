@@ -219,11 +219,31 @@ def read_facts(fp: Iterator[str], source: str = "<stream>") -> TranslationUnit:
             tu.complete = True
 
     if not tu.complete:
-        raise FactStreamError(
-            f"{source}: fact stream is truncated (no 'done' record); "
-            "the extractor did not finish this translation unit"
-        )
+        raise FactStreamError(_truncated(tu, source))
     return tu
+
+
+def _truncated(tu: TranslationUnit, source: str) -> str:
+    """Why a stream that stopped early stopped.
+
+    Usually a crash or a killed process, and there is nothing more to say.  But
+    Clang also ends this way when it gives up on something it cannot read - an
+    unreadable precompiled header, say - and reports that as a diagnostic
+    instead of by exiting non-zero.  The diagnostics read before the stream
+    ended are then the only account of why, and discarding them leaves a
+    message that says what happened and never why: the reader is told the
+    extractor did not finish, when it finished and said so.
+    """
+    message = (f"{source}: fact stream is truncated (no 'done' record); "
+               "the extractor did not finish this translation unit")
+    # The first of the worst.  A fatal is the cause of the stop; anything after
+    # it is the cascade, and "too many errors emitted" is the loudest of those.
+    for severity in ("fatal", "error"):
+        for diag in tu.diags:
+            if diag.severity == severity and diag.message:
+                return (f"{message}; it reported {severity}: {diag.message} "
+                        f"before stopping")
+    return message
 
 
 def read_facts_file(path) -> TranslationUnit:

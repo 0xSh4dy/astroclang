@@ -90,6 +90,41 @@ class TestReader(unittest.TestCase):
             read_facts(iter(text), source="a.cpp")
         self.assertIn("a.cpp", str(ctx.exception))
 
+    def test_a_truncated_stream_repeats_why_it_stopped(self):
+        # A stream can also stop because Clang gave up - an unreadable
+        # precompiled header, for instance - and it says so in a diagnostic
+        # rather than by exiting non-zero.  That diagnostic is the whole
+        # explanation, and it arrives before the stream ends, so a reader who
+        # is told only "the extractor did not finish" is told what happened
+        # and not why.
+        text = stream(
+            {"t": "f", "i": 0, "p": "a.cpp"},
+            {"t": "diag", "sev": "fatal", "m": "malformed or corrupted AST file"},
+        )
+        with self.assertRaises(FactStreamError) as ctx:
+            read_facts(iter(text), source="a.cpp")
+        self.assertIn("truncated", str(ctx.exception))
+        self.assertIn("malformed or corrupted AST file", str(ctx.exception))
+
+    def test_the_cause_is_reported_rather_than_the_cascade(self):
+        # Clang reports the fatal first and then everything that followed from
+        # it; quoting the last of those would name the symptom.
+        text = stream(
+            {"t": "diag", "sev": "error", "m": "use of undeclared identifier"},
+            {"t": "diag", "sev": "fatal", "m": "the cause"},
+            {"t": "diag", "sev": "error", "m": "too many errors emitted"},
+        )
+        with self.assertRaises(FactStreamError) as ctx:
+            read_facts(iter(text), source="a.cpp")
+        self.assertIn("the cause", str(ctx.exception))
+        self.assertNotIn("too many errors", str(ctx.exception))
+
+    def test_a_truncated_stream_with_no_diagnostic_still_says_so(self):
+        with self.assertRaises(FactStreamError) as ctx:
+            read_facts(iter(stream({"t": "f", "i": 0, "p": "a.cpp"})),
+                       source="a.cpp")
+        self.assertIn("truncated", str(ctx.exception))
+
     def test_malformed_line_is_rejected(self):
         text = stream(*COMPLETE[:-1]) + ['{"t": "sym", "u": "c:@F@x"']
         with self.assertRaises(FactStreamError):
