@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Extensions the extractor can be handed.  `.h` is deliberately absent: a
 # header is indexed through the translation units that include it, and feeding
@@ -74,10 +75,29 @@ class CompilationDatabase:
     files: List[Path] = field(default_factory=list)
     source: str = "none"
     detail: str = ""
+    # Which translation units the database compiles under a precompiled header,
+    # mapped to that header.  The extractor can read a precompiled header only
+    # when its own compiler wrote it, and the database records how the project
+    # was built rather than how this tool was: the entry is here so the driver
+    # can retry such a unit without it, which is a decision only the result of
+    # the attempt can justify.
+    pch_by_file: Dict[Path, str] = field(default_factory=dict)
+    # Translations units the database lists that build a precompiled header
+    # rather than compile anything.  They are build machinery, not sources, and
+    # are left out of `files`.
+    pch_builders: int = 0
 
     @property
     def found(self) -> bool:
         return self.path is not None
+
+    def names_precompiled_header(self, path: Path) -> bool:
+        """Whether this translation unit is compiled under a precompiled header."""
+        return Path(path) in self.pch_by_file
+
+    def precompiled_header(self, path: Path) -> str:
+        """The precompiled header this translation unit's command names, or ''."""
+        return self.pch_by_file.get(Path(path), "")
 
 
 def find_compilation_database(root: Path,
@@ -112,6 +132,60 @@ def find_compilation_database(root: Path,
     )
 
 
+def _command_of(entry: dict) -> List[str]:
+    """The compiler arguments an entry records, however it records them.
+
+    A database spells its commands as a list or as one shell string, and which
+    it uses is the generator's choice.  Only the arguments are needed here, and
+    only to read the few options that decide how a translation unit is treated:
+    Clang parses the command itself when the extractor runs.  A token this
+    splits wrongly can therefore cost a retry and nothing else.
+    """
+    args = entry.get("arguments")
+    if isinstance(args, list):
+        return [str(a) for a in args]
+    command = entry.get("command")
+    if isinstance(command, str):
+        try:
+            return shlex.split(command)
+        except ValueError:
+            return command.split()
+    return []
+
+
+def _include_pch(args: Sequence[str]) -> str:
+    """The precompiled header this command loads, or "" if it loads none.
+
+    Both spellings occur.  `-Xclang` hands an option straight to the frontend,
+    which is how a generated database writes the options the driver would
+    otherwise rewrite or reject.
+    """
+    for i, arg in enumerate(args):
+        if arg == "-include-pch" and i + 1 < len(args):
+            return args[i + 1]
+        if (arg == "-Xclang" and i + 3 < len(args)
+                and args[i + 1] == "-include-pch" and args[i + 2] == "-Xclang"):
+            return args[i + 3]
+    return ""
+
+
+def _builds_pch(args: Sequence[str]) -> bool:
+    """Whether this command produces a precompiled header, not an object file.
+
+    CMake generates one translation unit per target to build the preamble and
+    lists it in the database like any other.  It is the preamble itself rather
+    than a source of the project, and it is not a source of any other project
+    either: indexing one reports no symbols and the diagnostics of compiling
+    the project's own headers a second time.
+    """
+    for i, arg in enumerate(args):
+        if arg == "-emit-pch":
+            return True
+        if arg == "-Xclang" and i + 1 < len(args) and args[i + 1] == "-emit-pch":
+            return True
+    return False
+
+
 def _load(path: Path) -> CompilationDatabase:
     db = CompilationDatabase(path=path, directory=path.parent)
     try:
@@ -141,11 +215,21 @@ def _load(path: Path) -> CompilationDatabase:
             p = Path(os.path.normpath(str(p)))
             if p.suffix.lower() in SOURCE_EXTENSIONS and p not in seen:
                 seen.add(p)
-                db.files.append(p)
+                args = _command_of(entry)
+                if _builds_pch(args):
+                    db.pch_builders += 1
+                else:
+                    db.files.append(p)
+                    pch = _include_pch(args)
+                    if pch:
+                        db.pch_by_file[p] = pch
             break
 
     db.files.sort()
     db.detail = f"{len(db.files)} translation units in {path}"
+    if db.pch_builders:
+        db.detail += (f"; {db.pch_builders} precompiled-header "
+                      f"builder{'s' if db.pch_builders > 1 else ''} skipped")
     return db
 
 

@@ -6,12 +6,14 @@ different file ids and different amounts of information; something has to
 decide which report becomes the symbol a caller sees.
 """
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
 from astroclang.facts import (EdgeFact, FileFact, IncludeFact, SymbolFact,
                                   TranslationUnit)
+from astroclang.schema import SCHEMA_VERSION
 from astroclang.store import Store
 
 
@@ -264,11 +266,69 @@ class TestMerge(StoreCase):
         self.assertEqual(self.store.stats()["translation_units"], 1)
 
 
+class TestDroppedPrecompiledHeader(StoreCase):
+    """A unit parsed without the header its build used says so, permanently.
+
+    Whether a translation unit was parsed under the build's own arguments is a
+    property of the facts stored from it, not of the run that stored them: a
+    query answering from this index a month later needs to know it too.
+    """
+
+    def test_it_is_stored_with_the_translation_unit(self):
+        unit = tu(self.source(), [(self.source(), False)])
+        unit.pch_dropped = "/b/cmake_pch.hxx.pch"
+        self.store.ingest(unit)
+        row = self.store.tu_records()[0]
+        self.assertEqual(row["pch_dropped"], "/b/cmake_pch.hxx.pch")
+        self.assertEqual(self.store.stats()["pch_dropped_tus"], 1)
+
+    def test_a_unit_without_one_stores_nothing(self):
+        self.store.ingest(tu(self.source(), [(self.source(), False)]))
+        self.assertIsNone(self.store.tu_records()[0]["pch_dropped"])
+        self.assertEqual(self.store.stats()["pch_dropped_tus"], 0)
+
+    def test_reindexing_without_it_clears_the_old_record(self):
+        # The row is replaced, never merged: a unit re-parsed under the build's
+        # own arguments is not the unit that was parsed without them.
+        unit = tu(self.source(), [(self.source(), False)])
+        unit.pch_dropped = "/b/cmake_pch.hxx.pch"
+        self.store.ingest(unit)
+        self.store.ingest(tu(self.source(), [(self.source(), False)]))
+        self.assertIsNone(self.store.tu_records()[0]["pch_dropped"])
+        self.assertEqual(self.store.stats()["pch_dropped_tus"], 0)
+
+
 class TestSchemaRejection(StoreCase):
     def test_schema_version_is_recorded(self):
         row = self.store.connection().execute(
             "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-        self.assertEqual(int(row["value"]), 1)
+        self.assertEqual(int(row["value"]), SCHEMA_VERSION)
+
+    def test_an_index_from_before_a_column_existed_still_opens(self):
+        # An index is a cache of the source, so an older one is worth keeping
+        # where it can be brought forward: rebuilding is always allowed, but a
+        # column that records something the older build never knew to record
+        # does not make the facts in it wrong.
+        path = self.root / "old.db"
+        old = sqlite3.connect(path)
+        old.executescript(
+            "CREATE TABLE tu (id INTEGER PRIMARY KEY, file_id INTEGER,"
+            " config_source TEXT, config_detail TEXT,"
+            " degraded INTEGER NOT NULL DEFAULT 0,"
+            " errors INTEGER NOT NULL DEFAULT 0, stamp TEXT, indexed_at REAL,"
+            " UNIQUE (file_id));")
+        old.commit()
+        old.close()
+
+        store = Store(path, project_root=self.root)
+        self.addCleanup(store.close)
+        columns = {r["name"] for r in
+                   store.connection().execute("PRAGMA table_info(tu)")}
+        self.assertIn("pch_dropped", columns)
+        self.assertEqual(
+            int(store.connection().execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()["value"]), SCHEMA_VERSION)
 
 
 class TestPlannerStatistics(StoreCase):

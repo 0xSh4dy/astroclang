@@ -19,7 +19,11 @@ Edges are left unmerged.  Aggregating a call edge across translation units
 loses the call sites, and the call sites are what a reviewer actually wants.
 """
 
-SCHEMA_VERSION = 1
+# Bumped when a column is added, so an index written by an older build can say
+# what it is.  The store migrates what it can and the value is reported by the
+# health tool: an index whose shape does not match the code reading it is worth
+# knowing about, and rebuilding one costs only the time to read the sources.
+SCHEMA_VERSION = 2
 
 DDL = """
 PRAGMA foreign_keys = ON;
@@ -46,6 +50,11 @@ CREATE TABLE IF NOT EXISTS tu (
     config_source TEXT,
     config_detail TEXT,
     degraded      INTEGER NOT NULL DEFAULT 0,
+    -- The precompiled header this unit's build used and the extractor did not
+    -- load.  Facts from such a unit were produced under arguments the build
+    -- did not use, which is a reduction in fidelity that stays true of the
+    -- stored facts however long ago the parse happened.
+    pch_dropped   TEXT,
     errors        INTEGER NOT NULL DEFAULT 0,
     -- Hash of the TU's own bytes plus the compile command, so a re-run can
     -- skip work that has not changed.

@@ -26,14 +26,62 @@ import json, os, sys
 
 path = sys.argv[-1]
 mode = os.environ.get("STUB_MODE", "ok")
+# Whether the driver dropped the precompiled header for this attempt.  It is
+# the driver's decision and it is visible nowhere else in the stream, so a test
+# that cares whether a unit was retried reads it from here.
+nopch = "--no-pch" in sys.argv
+
+log = os.environ.get("STUB_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write(("--no-pch " if nopch else "") + os.path.basename(path) + "\\n")
+
+
+def command_args(target):
+    """What the database says about this file, as the real extractor reads it."""
+    try:
+        entries = json.load(open(sys.argv[sys.argv.index("--compdb") + 1]))
+    except (ValueError, OSError, json.JSONDecodeError):
+        return []
+    for entry in entries:
+        if os.path.abspath(entry.get("file", "")) == os.path.abspath(target):
+            if isinstance(entry.get("arguments"), list):
+                return [str(a) for a in entry["arguments"]]
+            return str(entry.get("command", "")).split()
+    return []
+
+
+# A precompiled header is named by the *command*, so only the units whose
+# command names one can fail on it - which is the property under test.
+has_pch = "-include-pch" in command_args(path)
 
 if mode == "crash":
     sys.stderr.write("astroclang-index: could not find a compilation database\\n")
     sys.exit(2)
 
 line = lambda r: sys.stdout.write(json.dumps(r) + "\\n")
+
+if mode == "pch-hard" and has_pch and nopch:
+    # The retry failed too, and for a reason that is not the header.  Nothing
+    # on stdout, because an extractor that cannot get as far as a stream has
+    # nothing to say on it - the reason goes to stderr, as it does for any
+    # failure that happens before the parse.
+    sys.stderr.write("astroclang-index: 'vector' file not found\\n")
+    sys.exit(2)
+
 line({"t": "meta", "k": "tu", "v": os.path.abspath(path)})
 line({"t": "meta", "k": "config_source", "v": "compile_commands.json"})
+
+if mode.startswith("pch") and has_pch and not nopch:
+    # What an unreadable precompiled header does.  Clang reports it as a fatal
+    # diagnostic and stops before the source is parsed, so the stream ends
+    # without the `done` record that says the facts are complete.
+    line({"t": "diag", "sev": "fatal",
+          "m": "malformed or corrupted AST file: 'malformed block record in AST file'"})
+    sys.exit(0)
+
+if nopch:
+    line({"t": "meta", "k": "pch_dropped", "v": "/build/cmake_pch.hxx.pch"})
 line({"t": "f", "i": 0, "p": os.path.abspath(path)})
 line({"t": "f", "i": 1, "p": os.path.abspath(os.path.join(os.path.dirname(path), "..", "include", "stub.h"))})
 tu = os.path.basename(path)
@@ -94,6 +142,25 @@ class ProjectCase(unittest.TestCase):
         ]
         path = self.root / "compile_commands.json"
         path.write_text(json.dumps(data))
+        return path
+
+    def compdb_arguments(self, entries):
+        """A database that spells its commands as argument lists, as CMake does."""
+        data = [
+            {"directory": str(self.root),
+             "file": str(self.root / name),
+             "arguments": ["clang++", *args, name]}
+            for name, args in entries
+        ]
+        path = self.root / "compile_commands.json"
+        path.write_text(json.dumps(data))
+        return path
+
+    def _attempt_log(self):
+        """Every extractor invocation, so a retry is visible as one."""
+        path = self.root / "attempts.log"
+        os.environ["STUB_LOG"] = str(path)
+        self.addCleanup(os.environ.pop, "STUB_LOG", None)
         return path
 
     def index(self, **kw):
@@ -176,6 +243,60 @@ class TestDiscovery(ProjectCase):
         ]))
         plan = plan_indexing(self.root)
         self.assertEqual([p.name for p in plan.files], ["a.cpp"])
+
+
+class TestPrecompiledHeaders(ProjectCase):
+    """Recognising the units a precompiled header decides how to parse."""
+
+    def test_a_header_named_through_the_frontend_is_recognised(self):
+        # `-Xclang` forwards the option to the frontend unchanged, which is how
+        # a generated database spells the ones the driver would rewrite.
+        self.compdb_arguments([
+            ("src/a.cpp", ["-Xclang", "-include-pch", "-Xclang", "/b/pch.pch"]),
+            ("src/b.cpp", ["-std=c++17"]),
+        ])
+        db = discovery.find_compilation_database(self.root)
+        self.assertEqual(db.precompiled_header(self.root / "src/a.cpp"),
+                         "/b/pch.pch")
+        self.assertTrue(db.names_precompiled_header(self.root / "src/a.cpp"))
+        self.assertFalse(db.names_precompiled_header(self.root / "src/b.cpp"))
+        self.assertEqual(db.precompiled_header(self.root / "src/b.cpp"), "")
+
+    def test_the_driver_spelling_is_recognised_too(self):
+        self.compdb_arguments([("src/a.cpp", ["-include-pch", "/b/pch.pch"])])
+        db = discovery.find_compilation_database(self.root)
+        self.assertEqual(db.precompiled_header(self.root / "src/a.cpp"),
+                         "/b/pch.pch")
+
+    def test_a_command_string_is_read_as_well_as_a_list(self):
+        path = self.root / "compile_commands.json"
+        path.write_text(json.dumps([
+            {"directory": str(self.root), "file": str(self.root / "src/a.cpp"),
+             "command": "clang++ -Xclang -include-pch -Xclang /b/pch.pch src/a.cpp"},
+        ]))
+        db = discovery.find_compilation_database(self.root)
+        self.assertEqual(db.precompiled_header(self.root / "src/a.cpp"),
+                         "/b/pch.pch")
+
+    def test_a_preamble_builder_is_not_a_translation_unit(self):
+        # CMake generates one per target and lists it like any other source.  It
+        # is the preamble rather than a source of the project, and reports no
+        # symbols at all: 0 facts against 20 diagnostics from compiling the
+        # project's own headers a second time.
+        self.compdb_arguments([
+            ("src/a.cpp", ["-std=c++17"]),
+            ("build/pre.cxx", ["-x", "c++-header", "-Xclang", "-emit-pch"]),
+        ])
+        db = discovery.find_compilation_database(self.root)
+        self.assertEqual([p.name for p in db.files], ["a.cpp"])
+        self.assertEqual(db.pch_builders, 1)
+        self.assertIn("builder", db.detail)
+
+    def test_a_unit_without_one_is_left_alone(self):
+        self.compdb_arguments([("src/a.cpp", ["-std=c++17"])])
+        db = discovery.find_compilation_database(self.root)
+        self.assertEqual(db.pch_by_file, {})
+        self.assertNotIn("builder", db.detail)
 
 
 class TestIndexing(ProjectCase):
@@ -299,6 +420,79 @@ class TestIndexing(ProjectCase):
         finally:
             os.environ.pop("STUB_MODE", None)
         self.assertEqual(self.store.stats()["translation_units"], 0)
+
+    def test_a_unit_whose_header_cannot_be_read_is_retried_without_it(self):
+        # The header is readable only by the compiler that wrote it, and the
+        # database records how the project was built rather than how this tool
+        # was.  The unit yields nothing at all until it is parsed without it.
+        log = self._attempt_log()
+        self.compdb_arguments([
+            ("src/a.cpp", ["-Xclang", "-include-pch", "-Xclang", "/b/pch.pch"]),
+            ("src/b.cpp", ["-std=c++17"]),
+        ])
+        os.environ["STUB_MODE"] = "pch"
+        try:
+            report = self.index()
+        finally:
+            os.environ.pop("STUB_MODE", None)
+
+        self.assertEqual((report.indexed, report.failed), (2, 0))
+        self.assertEqual(report.pch_dropped, 1)
+        self.assertEqual(self.store.stats()["translation_units"], 2)
+        # Twice for the unit that names a header, once for the one that does
+        # not: the retry is decided per translation unit, from its own command.
+        self.assertEqual(sorted(log.read_text().splitlines()),
+                         ["--no-pch a.cpp", "a.cpp", "b.cpp"])
+        dropped = [r for r in report.results if r.pch_dropped]
+        self.assertEqual([r.path.name for r in dropped], ["a.cpp"])
+        self.assertEqual(dropped[0].pch_dropped, "/build/cmake_pch.hxx.pch")
+
+    def test_a_retry_that_fails_too_reports_the_second_reason(self):
+        # The second attempt is the one that is not about the header, so its
+        # reason is the one worth reporting.
+        self.compdb_arguments([
+            ("src/a.cpp", ["-Xclang", "-include-pch", "-Xclang", "/b/pch.pch"]),
+            ("src/b.cpp", ["-std=c++17"]),
+        ])
+        os.environ["STUB_MODE"] = "pch-hard"
+        try:
+            report = self.index()
+        finally:
+            os.environ.pop("STUB_MODE", None)
+        self.assertEqual((report.indexed, report.failed), (1, 1))
+        self.assertIn("'vector' file not found", report.failures[0].detail)
+        self.assertEqual(report.pch_dropped, 0)
+
+    def test_a_failure_with_no_header_named_is_not_retried(self):
+        # Nothing about the command says a precompiled header was involved, so
+        # there is nothing to drop and no second attempt to make.
+        log = self._attempt_log()
+        self.compdb_arguments([("src/a.cpp", ["-std=c++17"])])
+        os.environ["STUB_MODE"] = "crash"
+        try:
+            report = self.index()
+        finally:
+            os.environ.pop("STUB_MODE", None)
+        self.assertEqual(report.failed, 1)
+        self.assertEqual(log.read_text().splitlines(), ["a.cpp"])
+
+    def test_a_header_named_makes_the_unit_worth_retrying_whatever_failed(self):
+        # Why a unit failed is not visible from out here - the extractor stops
+        # with a truncated stream, which says the facts are incomplete and not
+        # what stopped them.  Where the command names a header, one retry is
+        # cheap enough to be worth making on the chance that it was the header.
+        log = self._attempt_log()
+        self.compdb_arguments([
+            ("src/a.cpp", ["-Xclang", "-include-pch", "-Xclang", "/b/pch.pch"]),
+        ])
+        os.environ["STUB_MODE"] = "crash"
+        try:
+            report = self.index()
+        finally:
+            os.environ.pop("STUB_MODE", None)
+        self.assertEqual(report.failed, 1)
+        self.assertEqual(log.read_text().splitlines(),
+                         ["a.cpp", "--no-pch a.cpp"])
 
     def test_notes_are_reported_to_the_caller(self):
         seen = []

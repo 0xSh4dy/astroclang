@@ -32,11 +32,14 @@ namespace {
 class AnalysisFactory : public FrontendActionFactory {
 public:
   AnalysisFactory(cg::FactWriter &W, const cg::Options &Opts,
-                  cg::ConfigSource Source, std::string Detail)
-      : W(W), Opts(Opts), Source(Source), Detail(std::move(Detail)) {}
+                  cg::ConfigSource Source, std::string Detail,
+                  std::string DroppedPCH)
+      : W(W), Opts(Opts), Source(Source), Detail(std::move(Detail)),
+        DroppedPCH(std::move(DroppedPCH)) {}
 
   std::unique_ptr<FrontendAction> create() override {
-    return std::make_unique<cg::AnalysisAction>(W, Opts, Source, Detail);
+    return std::make_unique<cg::AnalysisAction>(W, Opts, Source, Detail,
+                                                DroppedPCH);
   }
 
 private:
@@ -44,6 +47,7 @@ private:
   const cg::Options &Opts;
   cg::ConfigSource Source;
   std::string Detail;
+  std::string DroppedPCH;
 };
 
 void printUsage(llvm::raw_ostream &OS) {
@@ -56,6 +60,12 @@ void printUsage(llvm::raw_ostream &OS) {
         "      --compdb <path>      explicit path to compile_commands.json\n"
         "      --project-root <dir> project root, used by the fallback config\n"
         "      --std <standard>     language standard for the fallback config\n"
+        "      --no-pch             drop the precompiled header the arguments\n"
+        "                           name, and the forced include of the preamble it\n"
+        "                           was built from.  A precompiled header is\n"
+        "                           readable only by the compiler that wrote it,\n"
+        "                           and for one written by another this is the only\n"
+        "                           way the translation unit yields any facts\n"
         "      --print-config       report how arguments were found, then exit\n"
         "\n"
         "what to index:\n"
@@ -86,6 +96,7 @@ struct Args {
   std::string Output;
   bool PrintConfig = false;
   bool ShowStats = false;
+  bool NoPCH = false;
   bool Help = false;
 };
 
@@ -139,6 +150,8 @@ bool parseArgs(int argc, char **argv, Args &A, cg::Options &Opts,
       Opts.TemplateInstantiations = true;
     } else if (Arg == "--implicit-decls") {
       Opts.ImplicitDecls = true;
+    } else if (Arg == "--no-pch") {
+      A.NoPCH = true;
     } else if (Arg == "--print-config") {
       A.PrintConfig = true;
     } else if (Arg == "--stats") {
@@ -225,11 +238,44 @@ int main(int argc, char **argv) {
   llvm::raw_ostream &OS = FileOut ? static_cast<llvm::raw_ostream &>(*FileOut)
                                   : llvm::outs();
 
+  // The precompiled header the database names, if any.  Read off the command
+  // line here rather than from the adjuster below, because the fact stream
+  // reports it with the rest of the configuration, and that is written as the
+  // parse begins rather than as it ends.
+  std::string DroppedPCH;
+  if (A.NoPCH) {
+    std::vector<CompileCommand> Commands =
+        Config.DB->getCompileCommands(A.SourceFile);
+    if (!Commands.empty()) {
+      DroppedPCH =
+          cg::stripPrecompiledHeaderArguments(Commands.front().CommandLine)
+              .DroppedPCH;
+    }
+  }
+
   cg::FactWriter Writer(OS);
-  AnalysisFactory Factory(Writer, Opts, Config.Source, Config.Detail);
+  AnalysisFactory Factory(Writer, Opts, Config.Source, Config.Detail, DroppedPCH);
 
   ClangTool Tool(*Config.DB, {A.SourceFile});
   Tool.setPrintErrorMessage(Opts.Verbose);
+  if (A.NoPCH) {
+    // Opt-in, and it has to be.  A precompiled header is an AST file, and Clang
+    // reads an AST file only when the compiler reading it is the compiler that
+    // wrote it, so a project built by another compiler cannot be parsed under
+    // its own arguments at all - but that is a fact about the project, not
+    // something this tool can assume.  Where the header *is* readable, using it
+    // is what the build did and is the only parse whose result describes the
+    // build; dropping it silently would trade one inaccuracy for another.
+    //
+    // Adjusting rather than rewriting the database: the tool reads the command
+    // from the database itself, and this is the seam Clang offers for changing
+    // it.  The default syntax-only adjuster is already in the chain, so this
+    // runs on its output.
+    Tool.appendArgumentsAdjuster(
+        [](const CommandLineArguments &Args, llvm::StringRef) {
+          return cg::stripPrecompiledHeaderArguments(Args).Arguments;
+        });
+  }
   // ClangTool returns 1 on any diagnostic error.  A partial AST is still worth
   // indexing, so the exit code is reported through the fact stream (the "done"
   // and "errors" records) and a parse failure is not treated as extractor

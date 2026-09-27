@@ -17,6 +17,7 @@ to the package is used to find it.
 
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -634,6 +635,108 @@ class TestSourceContext(Corpus):
         ctx = self.q.source_context("geo", context_lines=0, max_lines=3)
         self.assertTrue(ctx["truncated"])
         self.assertEqual(len(ctx["source"].splitlines()), 3)
+
+
+@unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
+class TestPrecompiledHeader(unittest.TestCase):
+    """A build whose precompiled header this extractor cannot read.
+
+    A precompiled header is an AST file, and Clang reads one only when the
+    compiler reading it is the compiler that wrote it - the same version, built
+    with the same options.  A project built by a different compiler from the one
+    this tool links therefore cannot be parsed under its own arguments at all:
+    the header is refused as malformed, Clang stops before reading a line of the
+    source, and the translation unit yields nothing.  Nothing is wrong with the
+    source and nothing in the failure says which unit is at fault, so the driver
+    has to recognise it and parse the unit without the header instead.
+
+    Built here rather than added to the corpus: nothing about this is a
+    property of C++ being parsed, and the corpus is indexed once for every
+    other test in this file.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        for d in ("include", "src", "build"):
+            (self.root / d).mkdir()
+
+        self.write("include/common.h",
+                   "#pragma once\n"
+                   "struct Widget { int size; };\n"
+                   "int area(Widget);\n")
+        # What CMake generates for a target: the project's own headers, marked
+        # system, reached through one file that every command includes.
+        self.write("include/pre.h",
+                   "#pragma clang system_header\n"
+                   '#include "common.h"\n')
+        self.write("src/main.cpp",
+                   '#include "common.h"\n'
+                   "struct Own { Widget w; int f(); };\n"
+                   "int Own::f() { return area(w); }\n")
+
+        # Stands in for a precompiled header written by another compiler.  The
+        # file exists and is not an AST file this build can read, and that is
+        # the whole of the failure: the bytes are never interpreted.
+        self.pch = self.root / "build/cmake_pch.hxx.pch"
+        self.pch.write_bytes(b"an ast file this compiler did not write\n")
+
+        self.write("compile_commands.json", json.dumps([{
+            "directory": str(self.root),
+            "file": str(self.root / "src/main.cpp"),
+            "arguments": [
+                "clang++", "-std=c++17", f"-I{self.root / 'include'}",
+                "-Xclang", "-include-pch", "-Xclang", str(self.pch),
+                "-Xclang", "-include", "-Xclang", str(self.root / "include/pre.h"),
+                "-c", str(self.root / "src/main.cpp"),
+            ],
+        }]))
+
+        self.store = Store(self.root / ".idx/index.db", project_root=self.root)
+        self.addCleanup(self.store.close)
+
+    def write(self, rel, text):
+        path = self.root / rel
+        path.write_text(text)
+        return path
+
+    def extractor_run(self, *args):
+        proc = subprocess.run(
+            [str(EXTRACTOR), "--compdb", str(self.root / "compile_commands.json"),
+             "--project-root", str(self.root), *args, str(self.root / "src/main.cpp")],
+            capture_output=True, text=True, timeout=300)
+        return [json.loads(line) for line in proc.stdout.splitlines()]
+
+    def test_the_header_alone_stops_the_parse(self):
+        """The failure being survived, reproduced without the driver."""
+        records = self.extractor_run()
+        self.assertTrue(any(r.get("t") == "diag" and r.get("sev") == "fatal"
+                            for r in records),
+                        "expected Clang to refuse the precompiled header")
+        self.assertFalse(any(r.get("t") == "sym" for r in records))
+        self.assertFalse(any(r.get("t") == "done" for r in records))
+
+    def test_dropping_it_parses_the_unit(self):
+        """The same command with the header taken out does reach the source."""
+        records = self.extractor_run("--no-pch")
+        self.assertTrue(any(r.get("t") == "done" for r in records))
+        self.assertTrue(any(r.get("t") == "meta" and r.get("k") == "pch_dropped"
+                            and r.get("v") == str(self.pch) for r in records))
+
+    def test_the_driver_falls_back_and_says_so(self):
+        report = index_project(self.root, self.store, extractor=EXTRACTOR)
+        self.assertEqual(report.failed, 0, [f.detail for f in report.failures])
+        self.assertEqual(report.indexed, 1)
+        self.assertEqual(report.pch_dropped, 1)
+
+        # The declarations are the point: before this, the unit produced no
+        # facts at all, and a parse that merely stopped erroring would not be
+        # worth having.
+        q = Query(self.store)
+        for name in ("Widget", "area", "Own"):
+            self.assertEqual(len(q.resolve(name)), 1,
+                             f"{name} should have been parsed from the source")
 
 
 if __name__ == "__main__":

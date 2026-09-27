@@ -587,6 +587,26 @@ class TestIndexStatus(ToolCase):
         self.assertTrue(any("compilation database" in w
                             for w in out["warnings"]))
 
+    def test_a_dropped_precompiled_header_is_not_exact(self):
+        # The database is still the source of everything else, so this is not a
+        # guess - but the unit was parsed without the preamble its build used,
+        # and an answer read from it is worth less than one read from a unit
+        # that was.
+        from astroclang.facts import TranslationUnit
+        from astroclang.facts import FileFact
+
+        path = self.root / "src" / "with_pch.cpp"
+        self.store.ingest(TranslationUnit(
+            path=str(path), complete=True,
+            config_source="compile_commands.json",
+            pch_dropped="/b/cmake_pch.hxx.pch",
+            files=[FileFact(0, str(path), False)],
+        ))
+        out = self.call("get_index_status")
+        self.assertEqual(out["accuracy"], "approximate")
+        self.assertEqual(out["pch_dropped_tus"], 1)
+        self.assertTrue(any("precompiled header" in w for w in out["warnings"]))
+
 
 @unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
 class TestAgainstRealExtraction(Corpus):

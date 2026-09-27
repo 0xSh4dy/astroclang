@@ -84,6 +84,9 @@ class TuResult:
     includes: int = 0
     errors: int = 0
     degraded: bool = False
+    # The precompiled header this unit's build used and the extractor did not
+    # load, empty when the build named none or the extractor read it.
+    pch_dropped: str = ""
     seconds: float = 0.0
 
 
@@ -94,6 +97,7 @@ class IndexReport:
     failed: int = 0
     unchanged: int = 0
     degraded: int = 0
+    pch_dropped: int = 0
     seconds: float = 0.0
     notes: List[str] = field(default_factory=list)
     failures: List[TuResult] = field(default_factory=list)
@@ -195,6 +199,30 @@ def index_project(root: Path,
     def work(item: Tuple[Path, str]) -> Tuple[Path, str, Optional[TranslationUnit], str, float]:
         path, stamp = item
         tu, detail, elapsed = _run_one(exe, path, base_args, timeout)
+        if tu is None and plan.database.names_precompiled_header(path):
+            # The build compiles this unit under a precompiled header, and it
+            # did not reach the graph.  A precompiled header is an AST file, and
+            # Clang reads one only when the compiler reading it is the compiler
+            # that wrote it, so where the project was built by a different
+            # compiler than this tool links, the header is unreadable and Clang
+            # stops before parsing a single line of the source.
+            #
+            # Asking Clang is the test for that - it compares the full version
+            # string recorded inside the file, which is what decides, and it
+            # also catches a truncated header or one built with options this
+            # command no longer matches.  The retry is what follows from a
+            # failure: same unit, same arguments, header dropped.  Where the
+            # header was readable the first attempt does not get here, so a
+            # project built by the same compiler as this tool is unaffected.
+            retry_args = [*base_args, "--no-pch"]
+            tu2, detail2, elapsed2 = _run_one(exe, path, retry_args, timeout)
+            elapsed += elapsed2
+            if tu2 is not None:
+                tu, detail = tu2, ""
+            else:
+                # The second failure is reported rather than the first: it is
+                # the one that is not about the precompiled header.
+                detail = detail2
         return path, stamp, tu, detail, elapsed
 
     workers = jobs if jobs > 0 else min(32, (os.cpu_count() or 4))
@@ -236,14 +264,19 @@ def index_project(root: Path,
                 includes=int(tu.stats.get("includes", 0)),
                 errors=tu.errors,
                 degraded=tu.degraded,
+                pch_dropped=tu.pch_dropped,
                 seconds=elapsed,
             )
             report.indexed += 1
             if tu.degraded:
                 report.degraded += 1
+            if tu.pch_dropped:
+                report.pch_dropped += 1
             report.results.append(result)
             if progress:
                 flag = " (degraded config)" if tu.degraded else ""
+                if tu.pch_dropped:
+                    flag += " (built with a precompiled header, parsed without it)"
                 if tu.errors:
                     flag += f" ({tu.errors} errors)"
                 progress(f"  indexed {rel}  "

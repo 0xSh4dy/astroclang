@@ -121,6 +121,43 @@ stats field), and the driver decides what a partial result is worth —
 `index_project` stores it, keeps the diagnostics, and reports the file as
 having errors rather than as failed.
 
+### Precompiled headers, and `--no-pch`
+
+A precompiled header is an AST file. Clang reads an AST file only when the
+compiler reading it is the compiler that wrote it: `ASTReaderListener::
+ReadFullVersionInformation`, in `clang/Serialization/ASTReader.h`, compares the
+*whole* version string recorded inside the file against the reading compiler's
+own, and anything that differs — a different release, a different build of the
+same release, options that no longer match the command — is a mismatch. The
+`VERSION_MAJOR` in `ASTBitCodes.h` is the coarser AST *format* number and is not
+the test.
+
+A compilation database records how the project was built, and nothing makes that
+compiler the one this extractor links against. When they differ, the header is
+refused (`malformed or corrupted AST file`), Clang stops before reading a line of
+the source, and the translation unit yields nothing at all — no symbols, no
+edges, and not even the `done` record that says the facts are complete.
+
+`--no-pch` is the answer: it removes `-include-pch` and the `-Xclang -include`
+of the header the precompiled header was built from. Both, because CMake writes
+them as a pair and dropping only the first is worse than dropping neither — the
+preamble is then parsed again from source at the top of every translation unit,
+still marked `#pragma clang system_header`, so the project's own headers are
+entered as system headers with their include guards already set, the source's
+own `#include` of them does nothing, and their declarations are not emitted as
+nodes. Measured on a CMake project whose preamble is its own headers: 43 symbols
+that way against 1525 with both dropped.
+
+It is opt-in, and the **driver** decides, because the header is unreadable for
+reasons only the reading compiler can see. `index_project` retries a translation
+unit once, without the header, and only when the first attempt failed *and* the
+command names one. Asking Clang is the test: a version comparison made out here
+would have to read a value that lives inside the file it cannot read, and would
+miss a truncated header or one built with options the command no longer
+matches. Where the header is readable the first attempt succeeds and nothing
+changes, which is the ordinary case for a project built by the compiler this
+tool links.
+
 ### `libclangTooling` + `JSONCompilationDatabase`
 
 `cg::loadCompilationConfig` (`CompilationDatabaseFactory.cpp`) tries, in order:

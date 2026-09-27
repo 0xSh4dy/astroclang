@@ -642,9 +642,17 @@ def _get_index_status(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
             sources.get(row["config_source"] or "unknown", 0) + 1
     if sources:
         out["compiler_arguments"] = sources
-        out["accuracy"] = min((_CONFIG_WORDS.get(s, "unknown") for s in sources),
-                              key=lambda w: ("exact", "approximate", "degraded",
-                                             "unknown").index(w))
+        accuracy = min((_CONFIG_WORDS.get(s, "unknown") for s in sources),
+                       key=lambda w: ("exact", "approximate", "degraded",
+                                      "unknown").index(w))
+        # A unit parsed without the precompiled header its build used was parsed
+        # under arguments the build did not use.  The database is still where
+        # everything else came from, so the result is not a guess - but it is
+        # not the build's own parse either, and an answer read from it is worth
+        # less than one read from a unit that was.
+        if accuracy == "exact" and stats.get("pch_dropped_tus"):
+            accuracy = "approximate"
+        out["accuracy"] = accuracy
     else:
         out["accuracy"] = "empty"
         out["note"] = ("no translation units have been indexed; run "
@@ -672,6 +680,13 @@ def _get_index_status(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
         out.setdefault("warnings", []).append(
             f"{stats['degraded_tus']} translation unit(s) were analysed from a "
             "fallback configuration"
+        )
+    if stats.get("pch_dropped_tus"):
+        out.setdefault("warnings", []).append(
+            f"{stats['pch_dropped_tus']} translation unit(s) were compiled under "
+            "a precompiled header this build could not read and were parsed "
+            "without it, so declarations that only the preamble provided are "
+            "missing from those units"
         )
     if stats.get("failed_tus"):
         out.setdefault("warnings", []).append(

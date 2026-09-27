@@ -30,8 +30,12 @@ namespace cg {
 
 class AnalysisAction : public clang::ASTFrontendAction {
 public:
+  /// `DroppedPCH` is the precompiled header the compilation database named and
+  /// the extractor did not load, empty when it named none.  It is reported in
+  /// the fact stream: the arguments this ran under are not the arguments the
+  /// build used, and a consumer has to be able to see that.
   AnalysisAction(FactWriter &Writer, const Options &Opts, ConfigSource Source,
-                 std::string SourceDetail);
+                 std::string SourceDetail, std::string DroppedPCH);
 
   bool BeginSourceFileAction(clang::CompilerInstance &CI) override;
   void EndSourceFileAction() override;
@@ -52,6 +56,7 @@ private:
   const Options &Opts;
   ConfigSource Source;
   std::string SourceDetail;
+  std::string DroppedPCH;
   std::unique_ptr<Indexer> Idx;
   unsigned ErrorCount = 0;
   std::string MainFile;

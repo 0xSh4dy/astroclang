@@ -167,8 +167,10 @@ private:
 }  // namespace
 
 AnalysisAction::AnalysisAction(FactWriter &Writer, const Options &O,
-                               ConfigSource Src, std::string Detail)
-    : W(Writer), Opts(O), Source(Src), SourceDetail(std::move(Detail)) {}
+                               ConfigSource Src, std::string Detail,
+                               std::string Dropped)
+    : W(Writer), Opts(O), Source(Src), SourceDetail(std::move(Detail)),
+      DroppedPCH(std::move(Dropped)) {}
 
 bool AnalysisAction::BeginSourceFileAction(CompilerInstance &CI) {
   SourceManager &SM = CI.getSourceManager();
@@ -195,6 +197,14 @@ bool AnalysisAction::BeginSourceFileAction(CompilerInstance &CI) {
     // The Python layer reads this to mark every symbol from this TU as
     // resolved under guessed configuration.
     W.emitMeta("degraded", "1");
+  }
+  if (!DroppedPCH.empty()) {
+    // Reported, not merely done.  Dropping a precompiled header does not make
+    // the parse worse - it is what makes it happen at all when the header was
+    // written by another compiler - but it does mean this translation unit was
+    // parsed under arguments the build did not use, and only the reader can
+    // decide whether that matters for the question being asked.
+    W.emitMeta("pch_dropped", DroppedPCH);
   }
 
   // Diagnostics are replaced rather than wrapped.  ClangTool created its

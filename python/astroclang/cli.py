@@ -412,6 +412,11 @@ def _report_indexing(report, db: Path, quiet: bool) -> None:
         _progress(f"warning: {report.degraded} translation unit(s) were analysed "
                   f"from a fallback configuration, so some declarations may be "
                   f"missing")
+    if report.pch_dropped:
+        _progress(f"note: {report.pch_dropped} translation unit(s) were compiled "
+                  f"under a precompiled header this build cannot read (a "
+                  f"precompiled header is readable only by the compiler that "
+                  f"wrote it) and were parsed without it")
 
 
 def _announce_mcp(db: Path, root: Path, server) -> None:

@@ -86,6 +86,7 @@ class Store:
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(DDL)
+        self._migrate()
         self._conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
@@ -103,6 +104,19 @@ class Store:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    def _migrate(self) -> None:
+        """Bring an index written by an older build up to the current shape.
+
+        Only additive changes are handled, and only because an index is a cache
+        of the source: rebuilding one is always allowed, so a migration has to
+        be correct rather than clever.  Adding a column with no default leaves
+        every existing row meaning exactly what it meant.
+        """
+        columns = {row["name"] for row in
+                   self._conn.execute("PRAGMA table_info(tu)")}
+        if "pch_dropped" not in columns:
+            self._conn.execute("ALTER TABLE tu ADD COLUMN pch_dropped TEXT")
 
     def _load_file_ids(self) -> None:
         for row in self._conn.execute(
@@ -229,9 +243,11 @@ class Store:
 
             cur = self._conn.execute(
                 "INSERT INTO tu(file_id, config_source, config_detail, degraded,"
-                " errors, stamp, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " pch_dropped, errors, stamp, indexed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (tu_file_id, tu.config_source, tu.config_detail,
-                 1 if tu.degraded else 0, tu.errors, stamp, time.time()),
+                 1 if tu.degraded else 0, tu.pch_dropped or None, tu.errors,
+                 stamp, time.time()),
             )
             tu_id = int(cur.lastrowid)
 
@@ -398,6 +414,9 @@ class Store:
             "diagnostics": c.execute("SELECT COUNT(*) FROM raw_diag").fetchone()[0],
             "degraded_tus": c.execute(
                 "SELECT COUNT(*) FROM tu WHERE degraded = 1"
+            ).fetchone()[0],
+            "pch_dropped_tus": c.execute(
+                "SELECT COUNT(*) FROM tu WHERE pch_dropped IS NOT NULL"
             ).fetchone()[0],
             "failed_tus": c.execute(
                 "SELECT COUNT(*) FROM tu WHERE errors > 0"

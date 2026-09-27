@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 // Included rather than forward-declared: CompilationConfig owns the database
 // through a unique_ptr, so its destructor needs the complete type.
@@ -56,5 +57,44 @@ CompilationConfig loadCompilationConfig(const std::string &SourceFile,
                                         const std::string &CompilationDatabasePath,
                                         const std::string &ProjectRoot,
                                         const std::string &StandardOverride);
+
+/// Compiler arguments with the precompiled-header ones taken out.
+struct StrippedArguments {
+  /// What to hand Clang.
+  std::vector<std::string> Arguments;
+
+  /// The precompiled header those arguments named, spelled as the database
+  /// spelled it; empty when they named none.  The caller reports it.  A
+  /// translation unit parsed without the precompiled header its build uses was
+  /// parsed under arguments the build did not use, and that is the caller's to
+  /// disclose rather than this function's to hide.
+  std::string DroppedPCH;
+};
+
+/// Removes the arguments that make Clang load or build a precompiled header.
+///
+/// A precompiled header is an AST file, and Clang reads an AST file only when
+/// it was written by the compiler reading it - the same version, built with the
+/// same options.  A compilation database is the build's record of how the
+/// project was compiled, and the compiler that wrote that record need not be
+/// the one this extractor was built against.  When it is not, the header is
+/// unreadable: Clang reports "malformed or corrupted AST file" as a diagnostic,
+/// stops, and the translation unit yields nothing at all.
+///
+/// Nothing else in a compile command is version-locked this way.  The source,
+/// the include paths, the defines and the language standard are all read by
+/// every version, so removing these arguments is what lets one extractor serve
+/// projects built by compilers other than its own.
+///
+/// When to do it is the caller's decision, and it is not one this function can
+/// make for them: the header is unreadable for reasons only the reading
+/// compiler can see.  A version comparison is not a substitute.  Clang's own
+/// test is full version string equality against the value recorded inside the
+/// AST file, and reading that value takes the same AST machinery that refuses
+/// the file in the first place.  Attempting the parse and letting Clang object
+/// is the authoritative check, and it also catches the causes a version
+/// comparison would miss: a truncated header, or one whose recorded options no
+/// longer match the command.
+StrippedArguments stripPrecompiledHeaderArguments(std::vector<std::string> Args);
 
 }  // namespace cg

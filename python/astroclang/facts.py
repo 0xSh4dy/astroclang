@@ -82,6 +82,11 @@ class TranslationUnit:
     config_source: str = ""
     config_detail: str = ""
     degraded: bool = False
+    # The precompiled header the build used for this translation unit and the
+    # extractor did not load, empty when the build named none or it was loaded.
+    # Facts from a translation unit parsed without its precompiled header were
+    # produced under arguments the build did not use.
+    pch_dropped: str = ""
     errors: int = 0
     stats: Dict[str, Any] = field(default_factory=dict)
     files: List[FileFact] = field(default_factory=list)
@@ -140,6 +145,8 @@ def read_facts(fp: Iterator[str], source: str = "<stream>") -> TranslationUnit:
                 tu.config_detail = value or ""
             elif key == "degraded":
                 tu.degraded = True
+            elif key == "pch_dropped":
+                tu.pch_dropped = value or ""
             elif key == "errors":
                 tu.errors = int((value or {}).get("errors", 0))
             elif key == "stats":

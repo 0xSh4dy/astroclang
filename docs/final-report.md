@@ -452,6 +452,13 @@ Summarized here; [`limitations.md`](limitations.md) is the full account.
 * **An anonymous struct inside a typedef shares the typedef's display name**,
   so a raw edge list shows what looks like a self-edge. The USRs differ and
   `find_symbol` returns both as candidates.
+* **A unit whose build used a precompiled header this tool cannot read is
+  parsed without it.** A precompiled header is readable only by the compiler
+  that wrote it, so a project built by a different compiler than this tool links
+  would otherwise yield nothing at all for those units. The retry is per unit
+  and reported: `pch_dropped_tus` counts them and `accuracy` drops to
+  `approximate`. Measured before and after on a real project: 0 units and 82
+  failures, against 82 units indexed and none failed.
 * **Nothing is claimed about other languages**, and none is planned for the
   sake of completeness.
 

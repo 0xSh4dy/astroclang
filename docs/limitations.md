@@ -157,8 +157,9 @@ and it is meant to be called first:
 
 | Field | Means |
 | --- | --- |
-| `accuracy` | `exact` (every translation unit had a compilation database), `degraded` (some were analyzed with a fallback), `unknown` (the index was built without recording a configuration) |
+| `accuracy` | `exact` (every translation unit had a compilation database), `approximate` (some were parsed without the precompiled header their build used, or their arguments were inferred), `degraded` (some were analyzed with a fallback), `unknown` (the index was built without recording a configuration) |
 | `degraded_tus` | how many were analyzed without a compilation database |
+| `pch_dropped_tus` | how many were parsed without the precompiled header their build used (see below) |
 | `failed_tus` | how many reported compiler errors, so declarations behind the error point are absent |
 | `diagnostics` | `get_diagnostics` has the actual messages |
 | `built_at` and the recorded revision | whether the index still describes the working tree |
@@ -167,3 +168,43 @@ A translation unit the extractor could not produce facts for *at all* — a cras
 or a missing binary — is a third thing again: the indexer's own report counts
 it as `failed` and keeps the previous entry for that file rather than replacing
 a complete result with a partial one.
+
+### Precompiled headers
+
+A precompiled header is an AST file, and Clang reads an AST file only when the
+compiler reading it is the compiler that wrote it. A project built by a
+different compiler than the one this tool links cannot be parsed under its own
+arguments at all: the header is refused, Clang stops before reading a line of
+the source, and the translation unit yields nothing — no symbols, no edges, and
+no `done` record saying the facts are complete.
+
+The driver recovers per translation unit. When a unit fails and its command
+names a precompiled header, the unit is parsed once more with `--no-pch`, which
+drops the header and the `-include` of the header it was built from, and the
+result is stored with `pch_dropped` set to the path of the header that was not
+read. That is what `pch_dropped_tus` counts. A unit parsed this way was parsed
+under arguments its build did not use, so:
+
+- `accuracy` is capped at `approximate` when any unit in the index was,
+- declarations that only the preamble provided are missing from that unit —
+  usually none, because a source that uses a declaration includes the header
+  that declares it, and CMake's preamble exists to save time rather than to
+  supply anything. Where a source does rely on it, the parse reports the
+  unknown name as a diagnostic rather than inventing a node, so the gap is
+  visible in `get_diagnostics` instead of silent.
+
+Two measurements behind this, both on a project small enough to count:
+
+- The preamble is marked `#pragma clang system_header`, and loading it — from a
+  precompiled header or from source — enters the project's own headers as
+  system headers with their include guards already set. The source's own
+  `#include` of them then does nothing, and their declarations are not emitted
+  as nodes. Dropping the precompiled header but keeping the `-include` beside
+  it is therefore the worst of the three arrangements: 43 symbols against 1525
+  for the same file with both dropped.
+- That cost is not a symptom of the version mismatch and does not go away when
+  the header is readable. Built and read by one compiler, the same synthetic
+  project yields 8 nodes with the preamble loaded against 16 without it,
+  whether the preamble arrives as a precompiled header or as text. Using a
+  readable precompiled header buys parsing speed and costs coverage, which is
+  why the choice is left to `--no-pch` rather than made silently either way.

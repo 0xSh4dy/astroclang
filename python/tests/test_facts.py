@@ -161,6 +161,25 @@ class TestReader(unittest.TestCase):
         self.assertTrue(tu.degraded)
         self.assertEqual(tu.errors, 2)
 
+    def test_a_dropped_precompiled_header_is_recorded(self):
+        # Facts from a unit parsed without the precompiled header its build
+        # used were produced under arguments the build did not use.  The stream
+        # says which header, and the reader keeps it.
+        text = stream(
+            {"t": "meta", "k": "tu", "v": "/p/a.cpp"},
+            {"t": "meta", "k": "pch_dropped", "v": "/b/cmake_pch.hxx.pch"},
+            {"t": "done", "v": 1},
+        )
+        tu = read_facts(iter(text))
+        self.assertEqual(tu.pch_dropped, "/b/cmake_pch.hxx.pch")
+
+    def test_no_precompiled_header_means_nothing_to_report(self):
+        text = stream(
+            {"t": "meta", "k": "tu", "v": "/p/a.cpp"},
+            {"t": "done", "v": 1},
+        )
+        self.assertEqual(read_facts(iter(text)).pch_dropped, "")
+
 
 if __name__ == "__main__":
     unittest.main()
