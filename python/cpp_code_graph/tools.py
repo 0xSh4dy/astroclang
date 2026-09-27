@@ -204,12 +204,15 @@ def _find_symbol(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     reference = _text(args, "reference", required=True)
     limit = _int(args, "limit", 10, 1, MAX_LIST)
     path = _text(args, "path")
-    matches = query.ambiguity(reference, path, limit)
-    out: Dict[str, Any] = {
-        "reference": reference,
-        "match_count": len(matches),
-        "matches": matches,
-    }
+    # One more than will be shown, so a full page can be told from a page that
+    # exactly fitted.  `match_count` is how many symbols match, which is not
+    # the same question as how many are listed.
+    matches = query.ambiguity(reference, path, limit + 1)
+    out: Dict[str, Any] = {"reference": reference, "matches": matches[:limit]}
+    if len(matches) > limit:
+        out["match_count"] = query.count_ambiguity(reference, path)
+    else:
+        out["match_count"] = len(matches)
     if not matches:
         out["note"] = (
             "nothing in the index matches that spelling; search_symbols "
@@ -221,7 +224,7 @@ def _find_symbol(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
             "several symbols match; narrow the question with `path`, or pass "
             "one of these `location` values to name exactly one"
         )
-        if len(matches) >= limit:
+        if len(matches) > limit:
             out["more"] = True
     return out
 
@@ -312,15 +315,18 @@ def _search_symbols(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     kind = _text(args, "kind") or None
     limit = _int(args, "limit", 20, 1, MAX_LIST)
     include_system = _flag(args, "include_system")
-    matches = query.search(text, kind=kind, limit=limit,
+    # One more than will be shown, so a full page can be told from a page that
+    # exactly fitted.  `match_count` is then the number that matched rather
+    # than the number returned, which is the question a caller is asking when
+    # it reads a count at all.
+    matches = query.search(text, kind=kind, limit=limit + 1,
                            include_system=include_system)
-    out: Dict[str, Any] = {
-        "query": text,
-        "match_count": len(matches),
-        "matches": matches,
-    }
-    if len(matches) >= limit:
+    out: Dict[str, Any] = {"query": text, "matches": matches[:limit]}
+    if len(matches) > limit:
+        out["match_count"] = query.count_search(text, kind, include_system)
         out["more"] = True
+    else:
+        out["match_count"] = len(matches)
     if not matches:
         out["note"] = "no name contains that text"
     return out
@@ -494,14 +500,15 @@ def _get_includes(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     if not query.has_file(path):
         raise _unknown_file(path)
     limit = _int(args, "limit", 50, 1, MAX_LIST)
-    out = query.includes(path, transitive=_flag(args, "transitive"),
-                         limit=limit)
+    # The lists come back whole and are cut here, so a cut one reports the
+    # number it was cut from.  Cutting inside the query would leave nothing
+    # downstream able to tell a page from the whole list.
+    out = query.includes(path, transitive=_flag(args, "transitive"))
     for key in ("includes", "included_by", "includes_transitively",
                 "included_by_transitively"):
         entries = out.get(key)
-        if isinstance(entries, list) and len(entries) > limit:
-            out[f"{key}_count"] = len(entries)
-            out[key] = entries[:limit]
+        if entries:
+            _cut(out, key, entries, limit)
     return out
 
 
@@ -511,7 +518,11 @@ def _get_file_dependencies(query: Query, args: Dict[str, Any]
     if not query.has_file(path):
         raise _unknown_file(path)
     limit = _int(args, "limit", 50, 1, MAX_LIST)
-    out = query.file_dependencies(path, limit=limit)
+    out = query.file_dependencies(path)
+    for key in ("includes_transitively", "included_by_transitively"):
+        entries = out.get(key)
+        if entries:
+            _cut(out, key, entries, limit)
     out["note"] = ("what this file needs, transitively: every header it "
                    "reaches, and every file that would be recompiled if it "
                    "changed")
@@ -651,8 +662,15 @@ def _get_index_status(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
 def _get_diagnostics(query: Query, args: Dict[str, Any]) -> Dict[str, Any]:
     path = _text(args, "path")
     limit = _int(args, "limit", 25, 1, MAX_LIST)
+    # `count` is how many the index holds and `diagnostics` is how many are
+    # shown; the two differing is the answer, not a discrepancy.  Reporting
+    # the length of the page as the count said "three warnings" on a build
+    # that had three hundred.
     entries = query.diagnostics(path or None, limit=limit)
-    out: Dict[str, Any] = {"count": len(entries), "diagnostics": entries}
+    out: Dict[str, Any] = {
+        "count": query.count_diagnostics(path or None),
+        "diagnostics": entries,
+    }
     out["note"] = ("errors and warnings the compiler raised while indexing; "
                    "constructs guarded by a failed declaration may be absent "
                    "from the graph")

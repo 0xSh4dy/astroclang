@@ -34,10 +34,18 @@ get_symbol("src/usage.cpp:32")     ->  the caller
 {"callers": [...10 entries...], "caller_count": 3406}
 ```
 
-`find_symbol` and `search_symbols` add `more: true` instead, because there they
-report a page of a search rather than a bounded list; the count-shaped tools
-report the exact total. Either way the reader is never left to guess whether it
-has seen everything.
+A search says the same thing in the words of a search — `match_count` is how
+many matched, `more` says the list is a page of them:
+
+```json
+{"matches": [...10 entries...], "match_count": 412, "more": true}
+```
+
+Counting costs a second query, so it is only asked for when the page came back
+full. An answer that fitted carries no count and no flag, because a count that
+was always the length of the list would invite exactly the misreading the count
+exists to prevent. Either way the reader is never left to guess whether it has
+seen everything.
 
 **Nothing is guessed.** A name that denotes three overloads comes back as three
 candidates. A dependency that holds only under run-time dispatch is labelled
@@ -325,6 +333,12 @@ The include edges come from the preprocessor, so a header reached through a
 macro still shows the file that was actually opened, after search-path
 resolution.
 
+The transitive lists are walked to completion and cut only for the answer, so a
+cut one carries its total as `includes_transitively_count`. Stopping the walk
+at the limit instead would leave nothing downstream able to tell a page from
+the whole closure — the caller would slice it against its own limit and,
+finding it no longer, report it as everything there was.
+
 ---
 
 ## 6. Source, in small pieces
@@ -389,6 +403,20 @@ Three degrees, and they are not equally certain.
 
 Every entry carries `reason`. Nothing in `possible` is claimed as affected.
 
+A bucket the limit stopped is named in `truncated`, because a bucket holding
+exactly `limit` entries cannot be told from a complete one by looking at it:
+
+```json
+{"direct": [...10 entries...], "truncated": ["direct", "possible"], ...}
+```
+
+Named per bucket rather than as one flag: the buckets are not equally certain,
+and neither is the confidence in each being complete. An impact analysis that
+quietly drops the forty-first caller is the one answer this tool must not give,
+since it is asked precisely when somebody is deciding whether a change is safe.
+`get_changed_symbols` carries the same key, inherited from the per-symbol
+reports it merges.
+
 ### `get_changed_symbols`
 
 Which symbols a commit, a range or the working tree changed.
@@ -434,9 +462,11 @@ Where the analysis could not see the whole translation unit.
  "note": "errors and warnings the compiler raised while indexing; constructs guarded by a failed declaration may be absent from the graph"}
 ```
 
-A file the compiler rejected contributes the declarations it got through and
-nothing behind the error point. This tool is how an agent distinguishes "that
-symbol does not exist" from "that symbol is behind a broken build".
+`count` is how many the index holds and `diagnostics` is how many are shown;
+the two differing is the answer, not a discrepancy. A file the compiler
+rejected contributes the declarations it got through and nothing behind the
+error point. This tool is how an agent distinguishes "that symbol does not
+exist" from "that symbol is behind a broken build".
 
 ---
 

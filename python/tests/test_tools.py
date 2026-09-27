@@ -11,7 +11,8 @@ import json
 import unittest
 
 from cpp_code_graph import indexer, tools
-from cpp_code_graph.facts import FileFact, TranslationUnit
+from cpp_code_graph.facts import (DiagFact, FileFact, IncludeFact,
+                                  TranslationUnit)
 from cpp_code_graph.tools import ToolError
 
 from tests.test_changes import RepoCase
@@ -243,6 +244,94 @@ class TestACutListSaysSo(ToolCase):
         self.assertGreater(out["symbol_count"], 3)
         self.assertEqual(out["symbol_count"], self.q.count_file_symbols(
             "include/iface.h"))
+
+
+class TestTheRestOfTheCutLists(ToolCase):
+    """The same promise, for the lists the first pass over the code missed.
+
+    Callers, callees, references, symbol dependencies and file symbols were
+    fixed first.  These are the others - a name search, a transitive include
+    closure, the diagnostics, and the impact buckets - each of which had the
+    same defect for the same reason: a page compared against its own limit.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A chain of headers deeper than any limit used below, so the
+        # transitive closure has something to cut: chain.cpp -> h0 -> ... -> h4.
+        chain = self.root / "src" / "chain.cpp"
+        headers = [self.root / "inc" / f"h{i}.h" for i in range(5)]
+        self.store.ingest(TranslationUnit(
+            path=str(chain), complete=True,
+            files=[FileFact(0, str(chain), False)]
+            + [FileFact(i + 1, str(h), False) for i, h in enumerate(headers)],
+            includes=[IncludeFact(i, i + 1, 1, False, headers[i].name)
+                      for i in range(len(headers))],
+            diags=[DiagFact("warning", file=0, line=i + 1,
+                            message=f"warning {i}") for i in range(7)],
+        ))
+        # A symbol with more callers than the limits used below, for the
+        # impact buckets.
+        target = "c:@N@mem@S@Helper@F@grow#l#"
+        fans = [sym(f"c:@F@fan{i}", "function", f"fan{i}", f"fan{i}", "()",
+                    file=0, line=40 + i) for i in range(8)]
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "fans.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "fans.cpp"), False)],
+            symbols=fans,
+            edges=[edge("calls", f.usr, target, file=0, line=40 + i)
+                   for i, f in enumerate(fans)],
+        ))
+        self.store.rebuild_symbols()
+
+    def test_a_search_counts_the_matches_not_the_page(self):
+        # `match_count` was the page length wearing the name of a total.
+        out = self.call("search_symbols", query="a", limit=2)
+        self.assertEqual(len(out["matches"]), 2)
+        self.assertGreater(out["match_count"], 2)
+        self.assertEqual(out["match_count"], self.q.count_search("a"))
+        self.assertTrue(out["more"])
+
+    def test_a_spelling_that_matches_many_counts_them_all(self):
+        out = self.call("find_symbol", reference="a", limit=2)
+        self.assertEqual(len(out["matches"]), 2)
+        self.assertGreater(out["match_count"], 2)
+        self.assertEqual(out["match_count"], self.q.count_ambiguity("a"))
+        self.assertTrue(out["more"])
+
+    def test_an_uncut_search_has_no_more_to_report(self):
+        out = self.call("search_symbols", query="mem::Fast", limit=50)
+        self.assertEqual(out["match_count"], len(out["matches"]))
+        self.assertNotIn("more", out)
+
+    def test_a_transitive_include_closure_is_counted(self):
+        out = self.call("get_includes", path="src/chain.cpp", transitive=True,
+                        limit=2)
+        self.assertEqual(len(out["includes_transitively"]), 2)
+        self.assertEqual(out["includes_transitively_count"], 5)
+
+    def test_file_dependencies_carry_the_same_count(self):
+        out = self.call("get_file_dependencies", path="src/chain.cpp", limit=2)
+        self.assertEqual(len(out["includes_transitively"]), 2)
+        self.assertEqual(out["includes_transitively_count"], 5)
+
+    def test_diagnostics_count_the_whole_not_the_page(self):
+        # `count` read as the number of diagnostics; it was the number shown.
+        out = self.call("get_diagnostics", path="src/chain.cpp", limit=3)
+        self.assertEqual(len(out["diagnostics"]), 3)
+        self.assertEqual(out["count"], 7)
+
+    def test_impact_names_the_bucket_the_limit_stopped(self):
+        # Nine callers - eight here plus the fixture's own - asked for three.
+        out = self.call("get_impact_analysis", symbol="mem::Helper::grow",
+                        limit=3)
+        self.assertEqual(len(out["direct"]), 3)
+        self.assertIn("direct", out["truncated"])
+
+    def test_an_uncut_impact_carries_no_truncation_to_misread(self):
+        out = self.call("get_impact_analysis", symbol="mem::Helper::grow",
+                        limit=50)
+        self.assertNotIn("truncated", out)
 
 
 class TestFiles(ToolCase):

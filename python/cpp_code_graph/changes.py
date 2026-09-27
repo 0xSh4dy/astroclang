@@ -16,7 +16,7 @@ nothing at all.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .discovery import HEADER_EXTENSIONS, SOURCE_EXTENSIONS
 from .git import Diff, collapse_ranges
@@ -130,6 +130,11 @@ def impact_of_changes(query: Query, diff: Diff, depth: int = 3,
     notes: List[str] = []
 
     unresolved: List[str] = []
+    # Inherited from the per-symbol reports: if any one symbol's bucket was a
+    # page, the merged bucket is missing entries too, and `affected_count`
+    # understates the change.  A count that understates is the one thing an
+    # impact analysis must not quietly produce.
+    truncated: Set[str] = set()
     for entry in changed:
         # By location, not by name.  A changed symbol is very often an
         # overload, and `geo::scale` alone names three of them - resolving by
@@ -140,6 +145,7 @@ def impact_of_changes(query: Query, diff: Diff, depth: int = 3,
             unresolved.append(entry["symbol"])
             continue
         report = query.impact(usr, depth=depth, limit=limit)
+        truncated.update(report.get("truncated", ()))
         notes.append(f"{entry['symbol']}: {report.get('note', '')}".strip())
         for bucket in buckets:
             for item in report.get(bucket, []):
@@ -161,6 +167,8 @@ def impact_of_changes(query: Query, diff: Diff, depth: int = 3,
         # Silently dropping these would understate the change, which is the
         # one thing an impact analysis must not do.
         out["could_not_resolve"] = sorted(set(unresolved))
+    if truncated:
+        out["truncated"] = sorted(truncated)
     return out
 
 

@@ -316,21 +316,47 @@ class Query:
         )
         return [self._ref_from_row(r) for r in rows]
 
+    def _search_filter(self, text: str, kind: Optional[str],
+                       include_system: bool) -> Tuple[str, List[Any]]:
+        """The predicate a search and its count are both built from.
+
+        Shared so the two cannot disagree about what matched.  A total that
+        counted symbols the list would not show is worse than no total: it
+        reads as an answer to "how many are there" and is not one.
+        """
+        where = "(s.name LIKE ? OR s.qualified LIKE ?)"
+        args: List[Any] = [f"%{text}%", f"%{text}%"]
+        if kind:
+            where += " AND s.kind = ?"
+            args.append(kind)
+        if not include_system:
+            where += (" AND s.file_id IN (SELECT id FROM file WHERE"
+                      " in_project = 1)")
+        return where, args
+
     def search(self, text: str, kind: Optional[str] = None,
                limit: int = 25, include_system: bool = False
                ) -> List[Dict[str, Any]]:
-        q = "SELECT s.* FROM symbol s WHERE (s.name LIKE ? OR s.qualified LIKE ?)"
-        args: List[Any] = [f"%{text}%", f"%{text}%"]
-        if kind:
-            q += " AND s.kind = ?"
-            args.append(kind)
-        if not include_system:
-            q += " AND s.file_id IN (SELECT id FROM file WHERE in_project = 1)"
+        where, args = self._search_filter(text, kind, include_system)
         # Prefer the shortest qualified name: a search for `Buffer` should
         # surface app::Buffer before app::Buffer::count_::something.
-        q += " ORDER BY LENGTH(COALESCE(s.qualified, s.name)), s.qualified LIMIT ?"
-        args.append(limit)
-        return [self._ref_from_row(r) for r in self.conn.execute(q, args)]
+        rows = self.conn.execute(
+            f"SELECT s.* FROM symbol s WHERE {where}"
+            " ORDER BY LENGTH(COALESCE(s.qualified, s.name)), s.qualified"
+            " LIMIT ?", [*args, limit])
+        return [self._ref_from_row(r) for r in rows]
+
+    def count_search(self, text: str, kind: Optional[str] = None,
+                     include_system: bool = False) -> int:
+        """How many symbols match, without listing them.
+
+        Asked for only when a page came back full: the LIKE cannot use an
+        index, so this costs what the search it is counting cost.
+        """
+        where, args = self._search_filter(text, kind, include_system)
+        return self.conn.execute(
+            f"SELECT COUNT(*) FROM symbol s WHERE {where}",
+            args).fetchone()[0]
 
     # -- edges ---------------------------------------------------------------
 
@@ -633,8 +659,15 @@ class Query:
             "translation_units": self.tus_reaching(path),
         }
 
-    def includes(self, path: str, transitive: bool = False,
-                 limit: int = 200) -> Dict[str, Any]:
+    def includes(self, path: str, transitive: bool = False) -> Dict[str, Any]:
+        """What this file includes, and what includes it.
+
+        Both lists come back whole, however long they are.  How much of one to
+        show is the caller's decision, and a closure cut off here could not be
+        told from a complete one by anyone downstream - the caller would slice
+        it against its own limit and, finding it no longer, report it as
+        everything there was.
+        """
         file_id = self._file_id(path)
         if file_id is None:
             return {"file": path, "includes": [], "included_by": []}
@@ -646,9 +679,8 @@ class Query:
             }
         return {
             "file": self.rel(self.store.file_path(file_id)),
-            "includes_transitively": self._closure(file_id, "includes", limit),
-            "included_by_transitively": self._closure(file_id, "included_by",
-                                                      limit),
+            "includes_transitively": self._closure(file_id, "includes"),
+            "included_by_transitively": self._closure(file_id, "included_by"),
         }
 
     def _direct_includes(self, file_id: int) -> List[Dict[str, Any]]:
@@ -673,27 +705,42 @@ class Query:
                 (file_id,))
         })
 
-    def _closure(self, file_id: int, direction: str, limit: int
-                 ) -> List[str]:
+    # A frontier is asked about in batches, because it goes into an `IN (...)`
+    # and SQLite bounds how many parameters one statement may carry.  A single
+    # wide level - a common header reached from most of a project - passes
+    # that bound well before an include closure runs out of files.
+    _FRONTIER_BATCH = 400
+
+    def _closure(self, file_id: int, direction: str) -> List[str]:
+        """Every file reachable from this one, in full.
+
+        Deliberately unbounded.  The result is bounded by the number of files
+        in the tree, and a caller that wants less can slice a complete list;
+        it cannot recover a truncated one.
+        """
         col, other = ("from_file", "to_file") if direction == "includes" else (
             "to_file", "from_file")
         seen: Set[int] = {file_id}
-        frontier = {file_id}
+        frontier = [file_id]
         out: List[str] = []
-        while frontier and len(out) < limit:
-            placeholders = ",".join("?" * len(frontier))
-            rows = self.conn.execute(
-                f"SELECT DISTINCT {other} AS u FROM raw_include"
-                f" WHERE {col} IN ({placeholders})", list(frontier))
-            nxt = {r["u"] for r in rows} - seen
+        while frontier:
+            nxt: Set[int] = set()
+            for start in range(0, len(frontier), self._FRONTIER_BATCH):
+                batch = frontier[start:start + self._FRONTIER_BATCH]
+                placeholders = ",".join("?" * len(batch))
+                rows = self.conn.execute(
+                    f"SELECT DISTINCT {other} AS u FROM raw_include"
+                    f" WHERE {col} IN ({placeholders})", batch)
+                nxt |= {r["u"] for r in rows}
+            nxt -= seen
             if not nxt:
                 break
             seen |= nxt
             out.extend(sorted(
                 self.rel(self.store.file_path(u)) for u in nxt
             ))
-            frontier = nxt
-        return out[:limit]
+            frontier = sorted(nxt)
+        return out
 
     def file_symbols(self, path: str, kind: Optional[str] = None,
                      limit: int = 200) -> List[Dict[str, Any]]:
@@ -871,12 +918,28 @@ class Query:
 
     def ambiguity(self, reference: str, path: Optional[str] = None,
                   limit: int = 20) -> List[Dict[str, Any]]:
-        """Every symbol `reference` could mean, for a caller to report."""
+        """Every symbol `reference` could mean, for a caller to report.
+
+        Paged here rather than by the caller because a bare name in a large
+        project can match hundreds of symbols, and an entry is built for each
+        one kept.  A caller that needs the total asks `count_ambiguity`, which
+        counts without building them.
+        """
         return [
             {"symbol": c.qualified, "signature": c.signature, "kind": c.kind,
              "location": c.location}
             for c in self._candidates(reference, path)[:limit]
         ]
+
+    def count_ambiguity(self, reference: str,
+                        path: Optional[str] = None) -> int:
+        """How many symbols a spelling could mean, without listing them.
+
+        Only asked for when a page came back full: it re-runs the candidate
+        search, which is the price of not building an entry per candidate just
+        to count them.
+        """
+        return len(self._candidates(reference, path))
 
     # -- impact --------------------------------------------------------------
 
@@ -907,8 +970,30 @@ class Query:
             entry["reason"] = reason
             bucket[key] = entry
 
+        # Every list below is fetched one longer than it will be shown, so that
+        # a bucket the limit stopped can say so.  A bucket holding exactly
+        # `limit` entries cannot be told from a complete one by looking at it,
+        # and an impact analysis that quietly drops the forty-first caller is
+        # the one answer this tool must not give: it is asked precisely when
+        # somebody is deciding whether a change is safe.
+        #
+        # The flag is set from the *lookup* rather than from the bucket, so it
+        # errs toward saying "there may be more".  An entry another bucket
+        # already claimed is dropped by `add`, which can leave a bucket shorter
+        # than the list it came from - reading the length would then call a cut
+        # list complete, which is the failure being fixed.
+        budget = limit + 1
+        cut: Set[str] = set()
+
+        def took(entries: List[Dict[str, Any]], bucket: str) -> None:
+            """Note that a bucket's source list held more than was read."""
+            if len(entries) > limit:
+                cut.add(bucket)
+
         # -- direct: the index records this dependency ------------------------
-        for entry in self.callers(usr, limit=limit):
+        callers = self.callers(usr, limit=budget)
+        took(callers, "direct")
+        for entry in callers:
             add(direct, entry, "calls this symbol")
 
         for entry in inherits.get("derived", []):
@@ -918,7 +1003,9 @@ class Query:
         # the type and every one of these uses is affected immediately.  A
         # callable is different, and is handled below.
         if not _is_callable(target["kind"]):
-            for entry in self._edges(usr, ("references",), "in", limit):
+            uses = self._edges(usr, ("references",), "in", budget)
+            took(uses, "direct")
+            for entry in uses:
                 add(direct, entry, "uses this symbol")
 
         # -- possible: it depends on run-time behaviour ----------------------
@@ -939,19 +1026,25 @@ class Query:
                     "inherits from this type, so it carries the change through "
                     "the members it did not redefine")
 
-        for entry in self._edges(usr, ("calls_indirect",), "in", limit):
+        through_pointer = self._edges(usr, ("calls_indirect",), "in", budget)
+        took(through_pointer, "possible")
+        for entry in through_pointer:
             add(possible, entry,
                 "calls this through a function pointer, so the target is only "
                 "known at run time")
 
-        for entry in self._edges(usr, ("references",), "in", limit):
+        addressed = self._edges(usr, ("references",), "in", budget)
+        took(addressed, "possible")
+        for entry in addressed:
             if _is_callable(target["kind"]):
                 add(possible, entry,
                     "takes the address of this function; the call site is "
                     "recorded against the pointer, not against this symbol")
 
-        for entry in self._edges(usr, ("specializes", "instantiates"), "in",
-                                 limit):
+        instantiations = self._edges(usr, ("specializes", "instantiates"), "in",
+                                     budget)
+        took(instantiations, "possible")
+        for entry in instantiations:
             add(possible, entry, "is an instantiation of this template")
 
         # -- indirect: callers of callers -------------------------------------
@@ -968,8 +1061,10 @@ class Query:
         for hop in range(2, depth + 1):
             nxt: List[str] = []
             for caller_usr in frontier:
-                for entry in self.callers(caller_usr, limit=limit,
-                                          with_usr=True):
+                callers_of_caller = self.callers(caller_usr, limit=budget,
+                                                 with_usr=True)
+                took(callers_of_caller, "indirect")
+                for entry in callers_of_caller:
                     entry_usr = entry.get("usr")
                     if not entry_usr or entry_usr in seen:
                         continue
@@ -980,10 +1075,15 @@ class Query:
                     entry["hops"] = hop
                     nxt.append(entry_usr)
             frontier = nxt
-            if not frontier or len(indirect) >= limit:
+            if not frontier:
+                break
+            if len(indirect) >= budget:
+                # A further hop would only add entries this answer will not
+                # show, so the walk stops - and says it stopped.
+                cut.add("indirect")
                 break
 
-        return {
+        report = {
             "symbol": target["qualified"] or target["name"],
             "location": self.loc(target["file_id"], target["line"]),
             "direct": list(direct.values())[:limit],
@@ -991,6 +1091,11 @@ class Query:
             "possible": list(possible.values())[:limit],
             "note": _IMPACT_NOTE,
         }
+        if cut:
+            # Named per bucket: the buckets are not equally certain, and
+            # neither is the confidence in each being complete.
+            report["truncated"] = sorted(cut)
+        return report
 
     # -- dependencies --------------------------------------------------------
 
@@ -1012,9 +1117,9 @@ class Query:
             grouped.setdefault(r["kind"], []).append(self._ref_from_row(r))
         return grouped
 
-    def file_dependencies(self, path: str, limit: int = 200
-                          ) -> Dict[str, Any]:
-        return self.includes(path, transitive=True, limit=limit)
+    def file_dependencies(self, path: str) -> Dict[str, Any]:
+        """What this file needs, transitively, and what needs it."""
+        return self.includes(path, transitive=True)
 
     # -- change detection ----------------------------------------------------
 
@@ -1084,8 +1189,14 @@ class Query:
         )
         return [self._ref_from_row(r) for r in rows]
 
-    def tus_reaching(self, path: str, limit: int = 500) -> List[str]:
-        """Translation units whose facts would change if this file changed."""
+    def tus_reaching(self, path: str) -> List[str]:
+        """Translation units whose facts would change if this file changed.
+
+        Whole, not paged.  Its caller reports how many there are, and a list
+        cut here would turn that report into a number the index cannot stand
+        behind - 500 translation units is a plausible header in a large
+        project, and the answer would read as complete.
+        """
         file_id = self._file_id(path)
         if file_id is None:
             return []
@@ -1098,7 +1209,7 @@ class Query:
         # headers it is included by, so a change to a header invalidates every
         # translation unit that can see it.
         ids = {file_id}
-        for rel in self._closure(file_id, "included_by", 2000):
+        for rel in self._closure(file_id, "included_by"):
             fid = self._file_id(rel)
             if fid is not None:
                 ids.add(fid)
@@ -1106,32 +1217,65 @@ class Query:
             q = ("SELECT DISTINCT file_id FROM tu WHERE file_id IN (%s)"
                  % ",".join("?" * len(ids)))
             tus |= {r["file_id"] for r in self.conn.execute(q, list(ids))}
-        return sorted(self.rel(self.store.file_path(t)) for t in tus)[:limit]
+        return sorted(self.rel(self.store.file_path(t)) for t in tus)
 
     # -- diagnostics ---------------------------------------------------------
 
-    def diagnostics(self, path: Optional[str] = None, limit: int = 50
-                    ) -> List[Dict[str, Any]]:
+    # Errors and warnings only.  A note is not something the index lost, and
+    # counting it would make the total mean something other than "how much of
+    # this translation unit failed to be analysed".
+    _DIAG_WHERE = " WHERE d.severity IN ('error','fatal','warning')"
+
+    def _diagnostic_filter(self, path: Optional[str]
+                           ) -> Optional[Tuple[str, List[Any]]]:
+        """The predicate a diagnostic listing and its count both use.
+
+        Shared so the two cannot disagree about which diagnostics are in
+        scope.  A count that included a file the list excludes would be worse
+        than no count.  `None` means the named file is not in the index, which
+        both callers answer with nothing.
+        """
+        where = self._DIAG_WHERE
         args: List[Any] = []
-        q = ("SELECT d.*, f.path AS path FROM raw_diag d"
-             " LEFT JOIN file f ON f.id = d.file_id WHERE d.severity IN"
-             " ('error','fatal','warning')")
         if path:
             file_id = self._file_id(path)
             if file_id is None:
-                return []
-            q += " AND d.file_id = ?"
+                return None
+            where += " AND d.file_id = ?"
             args.append(file_id)
-        q += " ORDER BY d.severity DESC, f.path LIMIT ?"
-        args.append(limit)
+        return where, args
+
+    def diagnostics(self, path: Optional[str] = None, limit: int = 50
+                    ) -> List[Dict[str, Any]]:
+        filt = self._diagnostic_filter(path)
+        if filt is None:
+            return []
+        where, args = filt
+        rows = self.conn.execute(
+            "SELECT d.*, f.path AS path FROM raw_diag d"
+            " LEFT JOIN file f ON f.id = d.file_id" + where +
+            " ORDER BY d.severity DESC, f.path LIMIT ?", [*args, limit])
         return [
             {
                 "severity": r["severity"],
                 "location": self.loc(r["file_id"], r["line"]),
                 "message": r["message"],
             }
-            for r in self.conn.execute(q, args)
+            for r in rows
         ]
+
+    def count_diagnostics(self, path: Optional[str] = None) -> int:
+        """How many errors and warnings the index holds, without listing them.
+
+        The join is not needed: `file_id` is on the diagnostic row, and `path`
+        is only ever selected.
+        """
+        filt = self._diagnostic_filter(path)
+        if filt is None:
+            return 0
+        where, args = filt
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM raw_diag d" + where, args).fetchone()[0]
 
 
 CALLABLE_KINDS = ("function", "method", "constructor", "destructor",
