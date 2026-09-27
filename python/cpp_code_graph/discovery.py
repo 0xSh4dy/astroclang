@@ -21,6 +21,13 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 # in the build.
 SOURCE_EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".c++", ".m", ".mm")
 
+# Headers are indexed through the translation units that include them, never
+# fed to the compiler directly.  Kept apart from SOURCE_EXTENSIONS for that
+# reason, but a file with one of these suffixes is still something the index is
+# expected to know about.
+HEADER_EXTENSIONS = (".h", ".hh", ".hpp", ".hxx", ".h++", ".inc", ".inl",
+                     ".ipp", ".tcc", ".tpp")
+
 # Directories never worth walking: version control metadata and caches, which
 # hold no source of the project's own.
 #

@@ -273,6 +273,27 @@ class Query:
         return [self._ref_from_row(r) for r in rows
                 if include_system or self._is_project_file(r["file_id"])]
 
+    def ancestors(self, usr: str, limit: int = 8) -> List[Dict[str, Any]]:
+        """What lexically encloses this symbol, innermost first.
+
+        Read from the parent chain rather than from source ranges: the
+        enclosing namespace of a function defined in a `.cpp` spans a body in
+        a different file, so a range test would miss it, while the parent
+        link records exactly what the compiler considered the scope.
+        """
+        out: List[Dict[str, Any]] = []
+        seen = {usr}
+        row = self._row(usr)
+        while row is not None and row["parent_usr"] and len(out) < limit:
+            if row["parent_usr"] in seen:
+                break
+            seen.add(row["parent_usr"])
+            row = self._row(row["parent_usr"])
+            if row is None:
+                break
+            out.append(self._ref_from_row(row))
+        return out
+
     def members(self, usr: str) -> List[Dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM symbol WHERE parent_usr = ? ORDER BY kind, line",
@@ -513,6 +534,10 @@ class Query:
             (f"%/{path}",),
         ).fetchone()
         return row["id"] if row else None
+
+    def has_file(self, path: str) -> bool:
+        """Whether the index has ever seen this file."""
+        return self._file_id(path) is not None
 
     def file(self, path: str) -> Optional[Dict[str, Any]]:
         file_id = self._file_id(path)
