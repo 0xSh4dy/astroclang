@@ -58,6 +58,24 @@ class TestFileInterning(StoreCase):
         a = self.store.file_id("/p/./sub/../x.h")
         self.assertEqual(a, self.store.file_id("/p/x.h"))
 
+    def test_a_relative_path_resolves_against_the_project_root(self):
+        # A compilation database writes its entries relative to the build
+        # directory, while an include is reported as the path the preprocessor
+        # opened.  Both name the same file and must intern to one row, or the
+        # file's symbols attach to one id and its translation unit to another.
+        absolute = self.store.file_id(str(self.source()))
+        relative = self.store.file_id("src/a.cpp")
+        self.assertEqual(absolute, relative)
+
+    def test_a_symlinked_path_is_the_same_file(self):
+        link = self.root / "link-to-src"
+        try:
+            link.symlink_to(self.root / "src")
+        except OSError as exc:  # pragma: no cover - filesystem dependent
+            self.skipTest(f"cannot create symlink: {exc}")
+        self.assertEqual(self.store.file_id(str(link / "a.cpp")),
+                         self.store.file_id(str(self.source())))
+
     def test_project_membership_is_recorded(self):
         inside = self.store.file_id(str(self.source()))
         outside = self.store.file_id("/usr/include/vector", is_system=True)

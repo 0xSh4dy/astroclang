@@ -465,5 +465,60 @@ class TestImpactOverTheCorpus(Corpus):
                          {d["symbol"] for d in report["direct"]})
 
 
+class TestFileIdentity(Corpus):
+    """One file, one identity.
+
+    The compilation database here writes relative paths, which is what a
+    hand-written or Meson-generated database looks like, while the preprocessor
+    reports headers by the path it opened.  Those are two spellings of one
+    file; if they intern separately the file's symbols attach to one id and
+    its translation unit to another, and every question about the file answers
+    "nothing".
+    """
+
+    def test_no_file_is_stored_twice(self):
+        rows = self.store.connection().execute(
+            "SELECT path, COUNT(*) AS n FROM file GROUP BY path HAVING n > 1"
+        ).fetchall()
+        self.assertEqual([dict(r) for r in rows], [])
+
+    def test_every_translation_unit_owns_the_symbols_it_declares(self):
+        for tu in ("src/shapes.cpp", "src/usage.cpp", "src/c_lib.c"):
+            with self.subTest(tu=tu):
+                self.assertTrue(self.q.file_symbols(tu),
+                                f"{tu} reports no symbols at all")
+
+    def test_a_source_file_lists_what_it_defines(self):
+        # shapes.cpp holds no declarations of its own: every symbol in it is
+        # declared in the header.  Listing by declaration alone says the file
+        # is empty.
+        names = {s["symbol"] for s in self.q.file_symbols("src/shapes.cpp")}
+        self.assertIn("geo::Circle::area", names)
+        self.assertIn("geo::scale", names)
+
+    def test_a_definition_is_found_by_its_line_in_the_source_file(self):
+        area = self.q.one("geo::Circle::area")[0]
+        entry = self.q.symbol(area.usr)
+        self.assertTrue(entry["defined_at"].startswith("src/shapes.cpp:"))
+        line = int(entry["defined_at"].rsplit(":", 1)[1])
+        hits = {h["symbol"]
+                for h in self.q.symbols_in_range("src/shapes.cpp", line, line)}
+        self.assertIn("geo::Circle::area", hits)
+
+    def test_a_declaration_is_found_by_its_line_in_the_header(self):
+        area = self.q.one("geo::Circle::area")[0]
+        line = int(area.location.rsplit(":", 1)[1])
+        hits = {h["symbol"]
+                for h in self.q.symbols_in_range("include/shapes.h", line, line)}
+        self.assertIn("geo::Circle::area", hits)
+
+    def test_the_innermost_container_of_a_line_in_a_body_is_its_function(self):
+        area = self.q.one("geo::Circle::area")[0]
+        entry = self.q.symbol(area.usr)
+        line = int(entry["defined_at"].rsplit(":", 1)[1])
+        hits = self.q.containers_in_range("src/shapes.cpp", line, line)
+        self.assertEqual(hits[0]["symbol"], "geo::Circle::area")
+
+
 if __name__ == "__main__":
     unittest.main()

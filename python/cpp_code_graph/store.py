@@ -30,6 +30,7 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.project_root = Path(project_root).resolve() if project_root else None
         self._file_ids: Dict[str, int] = {}
+        self._canon_cache: Dict[str, str] = {}
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         # WAL keeps a long re-index from blocking reads, and the durability
@@ -63,13 +64,31 @@ class Store:
 
     # -- files ---------------------------------------------------------------
 
-    def file_id(self, path: str, is_system: bool = False) -> int:
-        """Intern a path, returning its id.
+    def canonical(self, path: str) -> str:
+        """The one spelling of `path` this store will file it under.
 
-        Paths are stored as given but keyed after normalisation, so a header
-        reached as ``./include/x.h`` and ``/abs/include/x.h`` is one file.
+        `..` and `.` are removed, symlinks are followed, and a relative path
+        is resolved against the project root - because the things that name
+        files here do not agree.  A compilation database writes its entries
+        relative to the build directory, an include is reported as the path
+        the preprocessor opened, and a caller asks for whatever they typed.
+        Two spellings of one file must intern to one row: otherwise the
+        symbols attach to one id and the translation unit to another, and the
+        file appears to contain nothing - which is exactly how this was found.
         """
-        key = os.path.normpath(path)
+        cached = self._canon_cache.get(path)
+        if cached is not None:
+            return cached
+        p = path
+        if not os.path.isabs(p) and self.project_root is not None:
+            p = os.path.join(str(self.project_root), p)
+        key = os.path.realpath(p)
+        self._canon_cache[path] = key
+        return key
+
+    def file_id(self, path: str, is_system: bool = False) -> int:
+        """Intern a path, returning its id."""
+        key = self.canonical(path)
         existing = self._file_ids.get(key)
         if existing is not None:
             return existing
@@ -97,8 +116,12 @@ class Store:
         return row["path"] if row else None
 
     def file_ids_for(self, paths: Iterable[str]) -> List[int]:
-        return [self._file_ids[os.path.normpath(p)] for p in paths
-                if os.path.normpath(p) in self._file_ids]
+        out = []
+        for p in paths:
+            fid = self._file_ids.get(self.canonical(p))
+            if fid is not None:
+                out.append(fid)
+        return out
 
     # -- ingest --------------------------------------------------------------
 

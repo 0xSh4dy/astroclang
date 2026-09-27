@@ -171,8 +171,22 @@ AnalysisAction::AnalysisAction(FactWriter &Writer, const Options &O,
     : W(Writer), Opts(O), Source(Src), SourceDetail(std::move(Detail)) {}
 
 bool AnalysisAction::BeginSourceFileAction(CompilerInstance &CI) {
-  MainFile = std::string(getCurrentFile());
   SourceManager &SM = CI.getSourceManager();
+
+  // The translation unit's path, spelled the way every location in this
+  // stream will spell it.
+  //
+  // getCurrentFile() returns the path exactly as the compilation database
+  // wrote it, and a database of relative entries writes paths relative to the
+  // build directory.  A source location, meanwhile, is spelled by the file
+  // interner, which resolves symlinks and `..`.  Those are different strings
+  // for one file, and a consumer keying on the path would then hold the
+  // translation unit under one identity and its own symbols under another -
+  // leaving the file looking empty.  Interning the main file here reuses the
+  // single function that decides how a path is spelled.
+  const int MainID =
+      W.internLocation(SM, SM.getLocForStartOfFile(SM.getMainFileID()));
+  MainFile = MainID >= 0 ? W.path(MainID) : std::string(getCurrentFile());
 
   W.emitMeta("tu", MainFile);
   W.emitMeta("config_source", toString(Source));

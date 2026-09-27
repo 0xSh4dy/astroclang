@@ -481,6 +481,86 @@ class TestRanges(Fixture):
         hits = self.q.containers_in_range("src/use.cpp", 6, 6)
         self.assertEqual([h["symbol"] for h in hits], ["run"])
 
+    def test_a_symbol_defined_in_a_source_file_is_found_by_its_definition(self):
+        # `allocate` is declared in the header at line 6 and defined in
+        # pool.cpp at line 3.  Both are places the symbol occupies, and a
+        # change to either one changes it.
+        self.store.ingest(TranslationUnit(
+            path=str(self.pool), complete=True,
+            files=[FileFact(0, str(self.pool), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast@F@allocate#l#", "method", "allocate",
+                         "mem::Fast::allocate", "(unsigned long)", file=1,
+                         line=11, def_file=0, def_line=40, end_line=44)],
+        ))
+        self.store.rebuild_symbols()
+        by_definition = {h["symbol"]
+                         for h in self.q.symbols_in_range("src/pool.cpp", 41, 42)}
+        self.assertIn("mem::Fast::allocate", by_definition)
+        by_declaration = {h["symbol"]
+                          for h in self.q.symbols_in_range("include/iface.h", 11, 11)}
+        self.assertIn("mem::Fast::allocate", by_declaration)
+
+    def test_a_definition_end_line_is_not_read_against_the_declaration(self):
+        # The extractor takes `end_line` from the definition's source range
+        # while `line` is the declaration's, so a declaration in a header
+        # carries an end line from a source file - a smaller number, from a
+        # different file.  Reading the two together made a declaration fail to
+        # match its own line, which is how this was found.
+        self.store.ingest(TranslationUnit(
+            path=str(self.pool), complete=True,
+            files=[FileFact(0, str(self.pool), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast@F@allocate#l#", "method", "allocate",
+                         "mem::Fast::allocate", "(unsigned long)", file=1,
+                         line=11, def_file=0, def_line=40, end_line=44)],
+        ))
+        self.store.rebuild_symbols()
+        hits = self.q.symbols_in_range("include/iface.h", 11, 11)
+        self.assertIn("mem::Fast::allocate", {h["symbol"] for h in hits})
+        # ... and the header's other declarations are not dragged in by it.
+        self.assertNotIn("mem::Fast::allocate",
+                         {h["symbol"]
+                          for h in self.q.symbols_in_range("include/iface.h", 6, 6)})
+
+
+class TestFileContents(Fixture):
+    def test_a_source_file_reports_what_it_defines(self):
+        # A .cpp of out-of-line definitions declares nothing, so listing a
+        # file by declaration alone answers "empty" for the file that holds
+        # every body in the project.
+        self.store.ingest(TranslationUnit(
+            path=str(self.pool), complete=True,
+            files=[FileFact(0, str(self.pool), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast@F@allocate#l#", "method", "allocate",
+                         "mem::Fast::allocate", "(unsigned long)", file=1,
+                         line=6, def_file=0, def_line=3, end_line=7)],
+        ))
+        self.store.rebuild_symbols()
+        here = {s["symbol"] for s in self.q.symbols_in_file("src/pool.cpp")}
+        self.assertIn("mem::Fast::allocate", here)
+
+    def test_both_locations_are_reported_so_the_reader_can_tell_them_apart(self):
+        self.store.ingest(TranslationUnit(
+            path=str(self.pool), complete=True,
+            files=[FileFact(0, str(self.pool), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast@F@allocate#l#", "method", "allocate",
+                         "mem::Fast::allocate", "(unsigned long)", file=1,
+                         line=6, def_file=0, def_line=3, end_line=7)],
+        ))
+        self.store.rebuild_symbols()
+        entry = next(s for s in self.q.symbols_in_file("src/pool.cpp")
+                     if s["symbol"] == "mem::Fast::allocate")
+        self.assertEqual(entry["location"], "include/iface.h:6")
+        self.assertEqual(entry["defined_at"], "src/pool.cpp:3")
+
+    def test_a_kind_filter_narrows_the_listing(self):
+        kinds = {s["kind"] for s in self.q.file_symbols("include/iface.h",
+                                                       kind="class")}
+        self.assertEqual(kinds, {"class"})
+
 
 if __name__ == "__main__":
     unittest.main()

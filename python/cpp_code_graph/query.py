@@ -246,14 +246,25 @@ class Query:
                     out["member_of"] = (parent["qualified"] or parent["name"])
         return out
 
-    def symbols_in_file(self, path: str,
-                        include_system: bool = False) -> List[Dict[str, Any]]:
+    def symbols_in_file(self, path: str, include_system: bool = False,
+                        kind: Optional[str] = None,
+                        limit: int = 500) -> List[Dict[str, Any]]:
+        """What the file holds - declared or defined there.
+
+        A symbol appears in two places when its declaration and its definition
+        are apart, and a source file that holds only definitions would look
+        empty if only the declaration were consulted.  Each entry carries both
+        locations, so a reader can tell which one is in this file.
+        """
         file_id = self._file_id(path)
         if file_id is None:
             return []
         rows = self.conn.execute(
-            "SELECT * FROM symbol WHERE file_id = ? ORDER BY line, col",
-            (file_id,),
+            f"WITH spans AS ({self._SPANS}) SELECT * FROM spans WHERE"
+            " (file_id = :fid OR def_file_id = :fid)"
+            " AND (:kind IS NULL OR kind = :kind)"
+            f" ORDER BY {self._SPAN_START}, col LIMIT :limit",
+            {"fid": file_id, "kind": kind, "limit": limit},
         )
         return [self._ref_from_row(r) for r in rows
                 if include_system or self._is_project_file(r["file_id"])]
@@ -595,10 +606,8 @@ class Query:
 
     def file_symbols(self, path: str, kind: Optional[str] = None,
                      limit: int = 200) -> List[Dict[str, Any]]:
-        out = self.symbols_in_file(path, include_system=True)
-        if kind:
-            out = [s for s in out if s.get("kind") == kind]
-        return out[:limit]
+        return self.symbols_in_file(path, include_system=True, kind=kind,
+                                    limit=limit)
 
     # -- impact --------------------------------------------------------------
 
@@ -736,35 +745,69 @@ class Query:
 
     # -- change detection ----------------------------------------------------
 
-    def symbols_in_range(self, path: str, start: int, end: int
-                         ) -> List[Dict[str, Any]]:
+    # A symbol occupies source in one or two places, and the columns only say
+    # which is which if you know the rule behind them: the extractor records
+    # the *declaration's* file and line, and then, when a separate definition
+    # exists, the definition's file, line and **end** - the end line being read
+    # off the definition's source range.  So `end_line` belongs to
+    # `def_file_id` and never to `file_id`, while a method declared in a header
+    # and defined in a source file carries a line number from each.
+    #
+    # Reading `end_line` against `file_id` therefore misses symbols that a
+    # range plainly covers - it fails to match a declaration against its own
+    # line, because the end line is a smaller number from another file.  Each
+    # span is matched against the file it belongs to, and the declaration span
+    # is the declaration's own line whenever there is a definition elsewhere.
+    _SPANS = """
+        SELECT *,
+               (CASE WHEN def_file_id IS NULL THEN COALESCE(end_line, line)
+                     ELSE line END) AS decl_end,
+               COALESCE(end_line, def_line) AS def_end
+        FROM symbol
+    """
+    _SPAN_MATCH = """
+        (file_id = :fid AND line <= :end AND decl_end >= :start)
+        OR (def_file_id = :fid AND def_line <= :end AND def_end >= :start)
+    """
+    # The span the range actually landed in, used for ordering.  A definition
+    # in the queried file wins over a declaration there, because when both are
+    # present the definition is the one with a body in it.
+    _SPAN_START = "CASE WHEN def_file_id = :fid THEN def_line ELSE line END"
+    _SPAN_END = ("CASE WHEN def_file_id = :fid THEN def_end ELSE decl_end END")
+
+    def symbols_in_range(self, path: str, start: int, end: int,
+                         limit: int = 200) -> List[Dict[str, Any]]:
         file_id = self._file_id(path)
         if file_id is None:
             return []
         rows = self.conn.execute(
-            "SELECT * FROM symbol WHERE file_id = ? AND line <= ?"
-            " AND COALESCE(end_line, line) >= ? ORDER BY line",
-            (file_id, end, start),
+            f"WITH spans AS ({self._SPANS}) SELECT * FROM spans"
+            f" WHERE ({self._SPAN_MATCH})"
+            f" ORDER BY {self._SPAN_START}, {self._SPAN_END} LIMIT :limit",
+            {"fid": file_id, "start": start, "end": end, "limit": limit},
         )
         return [self._ref_from_row(r) for r in rows]
 
-    def containers_in_range(self, path: str, start: int, end: int
-                            ) -> List[Dict[str, Any]]:
+    def containers_in_range(self, path: str, start: int, end: int,
+                            limit: int = 50) -> List[Dict[str, Any]]:
         """Symbols that *contain* the range, not merely overlap its lines.
 
         A changed line inside a function body belongs to that function even
-        when the edit is to a local variable the index does not track.
+        when the edit is to a local variable the index does not track.  The
+        innermost container comes first, so the answer to "what is this line
+        part of" is the first entry.
         """
         file_id = self._file_id(path)
         if file_id is None:
             return []
         rows = self.conn.execute(
-            "SELECT * FROM symbol WHERE file_id = ? AND line <= ?"
-            " AND COALESCE(end_line, line) >= ? AND kind IN"
+            f"WITH spans AS ({self._SPANS}) SELECT * FROM spans"
+            f" WHERE ({self._SPAN_MATCH}) AND kind IN"
             " ('function','method','constructor','destructor','class','struct',"
             "'namespace','conversion_function')"
-            " ORDER BY (COALESCE(end_line,line) - line) ASC",
-            (file_id, start, end),
+            f" ORDER BY ({self._SPAN_END} - {self._SPAN_START}) ASC,"
+            " kind, name LIMIT :limit",
+            {"fid": file_id, "start": start, "end": end, "limit": limit},
         )
         return [self._ref_from_row(r) for r in rows]
 
