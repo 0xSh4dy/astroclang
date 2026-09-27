@@ -169,7 +169,7 @@ Within the Python package:
 cd python && python -m pytest tests/ -q
 ```
 
-317 tests. The semantic ones run the real extractor against a small adversarial
+319 tests. The semantic ones run the real extractor against a small adversarial
 corpus and assert on resolution, not on syntax: that an `int` argument lands on
 the `int` overload and a `double` argument on the other, that a call through a
 base pointer reaches the pure virtual while a call through a concrete object

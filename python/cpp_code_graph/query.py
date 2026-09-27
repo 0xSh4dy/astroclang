@@ -164,9 +164,16 @@ class Query:
             path, line = at
             file_id = self._file_id(path)
             if file_id is not None:
+                # The definition as well as the declaration.  A symbol is
+                # *reported* at its declaration, but `get_source_context`
+                # answers with `at`, which is the definition, and an agent that
+                # found the function by reading the source has the definition's
+                # line rather than the header's.  Matching only the declaration
+                # would make both of those fail to resolve.
                 rows = list(self.conn.execute(
-                    "SELECT s.* FROM symbol s WHERE s.file_id = ? AND s.line = ?"
-                    + where_kind, [file_id, line, *params]))
+                    "SELECT s.* FROM symbol s WHERE ((s.file_id = ? AND"
+                    " s.line = ?) OR (s.def_file_id = ? AND s.def_line = ?))"
+                    + where_kind, [file_id, line, file_id, line, *params]))
                 if rows:
                     return [self._ref(r) for r in rows]
 
@@ -1327,13 +1334,22 @@ def _read_lines(path: Optional[str]) -> Optional[List[str]]:
 
 def _split_location(reference: str) -> Optional[Tuple[str, int]]:
     """Recognise `src/pool.cpp:142` (a path may itself contain a colon on
-    Windows, so the numeric part is what decides)."""
+    Windows, so the numeric part is what decides).
+
+    A span is accepted as well as a single line - `src/pool.cpp:20-58` -
+    because that is the form `get_source_context` prints for a symbol's region,
+    and an answer that cannot be handed back as the next question is not much
+    of an answer.  The first line of the span is the one meant.
+    """
     head, sep, tail = reference.rpartition(":")
-    if not sep or not head or not tail.isdigit():
+    if not sep or not head:
+        return None
+    start = tail.split("-", 1)[0]
+    if not start.isdigit():
         return None
     if "/" not in head and "." not in head:
         return None
-    return head, int(tail)
+    return head, int(start)
 
 
 def _split_signature(reference: str) -> Tuple[str, str]:

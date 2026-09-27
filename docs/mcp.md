@@ -55,7 +55,7 @@ candidates. A dependency that holds only under run-time dispatch is labelled
 
 | Argument | Meaning |
 | --- | --- |
-| `symbol` | a name (`Foo::resize`), a qualified name with parameters to pick an overload (`Foo::resize(size_t)`), or a `file.cpp:142` location from an earlier result |
+| `symbol` | a name (`Foo::resize`), a qualified name with parameters to pick an overload (`Foo::resize(size_t)`), or a `file.cpp:142` location from an earlier result — including a definition line or a span (`file.cpp:20-58`) |
 | `path` | for a symbol-shaped tool, narrow a name that several files declare; for a file-shaped tool, the file itself. A bare basename is accepted when it is unambiguous |
 | `limit` | how many entries to return |
 | `include_system` | include symbols from system headers (default false) |

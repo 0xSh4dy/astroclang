@@ -167,6 +167,38 @@ class TestResolution(Fixture):
         self.assertIsNotNone(ref[0])
         self.assertEqual(ref[0].signature, "(double)")
 
+    def test_resolves_by_the_definition_location_too(self):
+        # A symbol occupies two places when it is declared in a header and
+        # defined in a source file.  It is *reported* at its declaration, but
+        # `get_source_context` answers with `at`, which is the definition, and
+        # an agent that found the function by reading the source has the
+        # definition's line.  Both are locations this tool emitted, so both
+        # have to resolve back.
+        self._one_symbol_declared_and_defined()
+        ref = self.q.one("src/pool.cpp:40")
+        self.assertIsNotNone(ref[0])
+        self.assertEqual(ref[0].qualified, "mem::Fast::allocate")
+
+    def test_resolves_by_a_span_as_well_as_a_single_line(self):
+        # `20-58` is the form `get_source_context` prints for a region, so a
+        # region cannot be handed to the next question unless a span parses.
+        # The first line of the span is the one meant.
+        self._one_symbol_declared_and_defined()
+        ref = self.q.one("src/pool.cpp:40-44")
+        self.assertIsNotNone(ref[0])
+        self.assertEqual(ref[0].qualified, "mem::Fast::allocate")
+
+    def _one_symbol_declared_and_defined(self):
+        self.store.ingest(TranslationUnit(
+            path=str(self.pool), complete=True,
+            files=[FileFact(0, str(self.pool), False),
+                   FileFact(1, str(self.hdr_path()), False)],
+            symbols=[sym("c:@N@mem@S@Fast@F@allocate#l#", "method", "allocate",
+                         "mem::Fast::allocate", "(unsigned long)", file=1,
+                         line=11, def_file=0, def_line=40, end_line=44)],
+        ))
+        self.store.rebuild_symbols()
+
     def test_resolves_by_qualified_suffix(self):
         ref = self.q.one("Allocator::size")
         self.assertIsNotNone(ref[0])

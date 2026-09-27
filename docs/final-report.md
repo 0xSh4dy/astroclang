@@ -263,7 +263,7 @@ named, because an empty answer would otherwise read as "nothing changed".
 
 ## 8. Tests
 
-**317 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
+**319 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
 the real extractor against a small adversarial corpus and assert on
 **resolution**, not on whether syntax nodes exist — which is the only kind of
 assertion that distinguishes this tool from a parser.
