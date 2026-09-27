@@ -219,15 +219,11 @@ discovered.
   costs one translation unit's facts, not the index — and `index_project`
   keeps the previous entry for that file rather than replacing a complete
   result with a partial one.
-* **Parallelism.** Translation units are independent by construction, so the
-  work is divided without any coordination between workers. The speedup this
-  buys is real but is *not* the 3.10× an early measurement reported: that run
-  gave the serial pass a cold page cache and the parallel pass a warm one, and
-  was withdrawn. The corrected sweep is scripted
-  ([`scripts/scaling.py`](../scripts/scaling.py)) and its result is a curve
-  rather than a number, bounded by memory before it is bounded by cores —
-  [`evaluation.md`](evaluation.md) §4 says what is measured and what is still
-  owed.
+* **Parallelism.** Translation units are independent by construction, so
+  worker count is just process management. The measured speedup saturates at
+  about 2.15×, and stops improving past four workers — see
+  [`evaluation.md`](evaluation.md) §4 for the sweep, and for why the earlier
+  figure of 3.10× was an artefact of the order the two runs happened in.
 * **Testability.** The fact stream is JSON Lines on stdout, so a test asserts on
   exactly what the analyzer saw, with no database in the way. `python/tests/test_semantics.py`
   is built entirely on that.

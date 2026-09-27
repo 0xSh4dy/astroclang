@@ -85,8 +85,9 @@ It is a separate process for three reasons:
 * **Isolation.** A Clang front end can crash on adversarial input. A crash
   costs one translation unit's facts, not the index.
 * **Parallelism.** Translation units are independent by construction; separate
-  processes are how that independence is used. The measured speedup on eight
-  cores is 3.1× (see [`evaluation.md`](evaluation.md)).
+  processes are how that independence is used. The measured speedup saturates
+  at about 2.15× on this machine's four physical cores, and eight workers are
+  not faster than four (see [`evaluation.md`](evaluation.md) §4).
 * **Diffability.** The output is JSON Lines on stdout, so a test can assert on
   exactly what the analyzer saw, and a human can `grep` it.
 
@@ -177,16 +178,31 @@ remainder.
 `Store` also owns three caches — path→id, id→path, id→in-project — because a
 query builds one entry per symbol it reports, and a project with sixty thousand
 symbols otherwise spends a few hundred thousand statements reading a table that
-fits in a few kilobytes. Measured, that was the difference between 108 ms and
-1.3 ms for `find_symbol` (see [`evaluation.md`](evaluation.md)).
+fits in a few kilobytes. Measured on the googletest index, routing those two
+lookups straight at SQL instead of through the caches takes `find_symbol` from
+**0.55 ms to 1.23 ms** — a factor of 2.3 on a query that is on the path of
+nearly every question. It is worth having, and it is worth being accurate about:
+the saving is seven tenths of a millisecond, not the order of magnitude an
+earlier draft of this section claimed. The same measurement shows the cache
+doing *nothing* for `search_symbols` (21.5 ms either way) or for `get_callers`
+on a hub (54.6 ms against 57.7 ms), because both are dominated by something
+else — a `LIKE` scan over every symbol, and counting a symbol's callers
+respectively.
 
-`Store.analyze()` runs `ANALYZE`, and it is not optional. Without planner
-statistics SQLite guessed that a `COUNT` over an indexed column was better
-served by scanning every edge in the database than by seeking the three that
-matched; the same query went from 53 ms to 0.02 ms with statistics. An index
-built by an older version has none, so `index_project` gathers them whenever it
-indexed something *or* the index has none — re-indexing is already how a user
-repairs a stale index, and it should not need a second flag.
+`Store.analyze()` runs `ANALYZE`. It is cheap insurance rather than a fix for a
+measured pathology: with the composite indexes in place (`idx_raw_edge_dst` is
+on `(kind, dst)`, so a `dst`-only lookup is served by SQLite's skip-scan),
+re-measuring the queries this section used to blame on missing statistics shows
+no difference between having them and not — 1.73 ms against 1.73 ms for a
+counted edge lookup, 29.6 ms against 28.9 ms for a hub's distinct-caller count.
+`REBUILD_SYMBOLS` runs a six-way join over the whole raw layer, which is the
+kind of plan statistics genuinely inform, so it is gathered; but the earlier
+claim here that statistics took a query "from 53 ms to 0.02 ms" is not
+reproducible against the current schema and has been removed rather than left
+standing. An index built by an older version has no statistics, so
+`index_project` gathers them whenever it indexed something *or* the index has
+none — re-indexing is already how a user repairs a stale index, and it should
+not need a second flag.
 
 ### 3.5 `query.py` — the graph
 

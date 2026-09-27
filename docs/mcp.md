@@ -31,21 +31,17 @@ get_symbol("src/usage.cpp:32")     ->  the caller
 **A list that has been cut says so, and carries its true length.**
 
 ```json
-{"callers": [...10 entries...], "caller_count": 3406}
+{"callers": [...10 entries...], "caller_count": 3606}
 ```
 
-A search says the same thing in the words of a search — `match_count` is how
-many matched, `more` says the list is a page of them:
+The 3606 is real: it is `get_callers` on `testing::internal::CodeLocation::CodeLocation`
+in the googletest index, asked with `limit: 10`, and the count is the whole list
+rather than the page.
 
-```json
-{"matches": [...10 entries...], "match_count": 412, "more": true}
-```
-
-Counting costs a second query, so it is only asked for when the page came back
-full. An answer that fitted carries no count and no flag, because a count that
-was always the length of the list would invite exactly the misreading the count
-exists to prevent. Either way the reader is never left to guess whether it has
-seen everything.
+`find_symbol` and `search_symbols` add `more: true` instead, because there they
+report a page of a search rather than a bounded list; the count-shaped tools
+report the exact total. Either way the reader is never left to guess whether it
+has seen everything.
 
 **Nothing is guessed.** A name that denotes three overloads comes back as three
 candidates. A dependency that holds only under run-time dispatch is labelled
@@ -55,7 +51,7 @@ candidates. A dependency that holds only under run-time dispatch is labelled
 
 | Argument | Meaning |
 | --- | --- |
-| `symbol` | a name (`Foo::resize`), a qualified name with parameters to pick an overload (`Foo::resize(size_t)`), or a `file.cpp:142` location from an earlier result — including a definition line or a span (`file.cpp:20-58`) |
+| `symbol` | a name (`Foo::resize`), a qualified name with parameters to pick an overload (`Foo::resize(size_t)`), or a `file.cpp:142` location from an earlier result |
 | `path` | for a symbol-shaped tool, narrow a name that several files declare; for a file-shaped tool, the file itself. A bare basename is accepted when it is unambiguous |
 | `limit` | how many entries to return |
 | `include_system` | include symbols from system headers (default false) |
@@ -375,12 +371,6 @@ The include edges come from the preprocessor, so a header reached through a
 macro still shows the file that was actually opened, after search-path
 resolution.
 
-The transitive lists are walked to completion and cut only for the answer, so a
-cut one carries its total as `includes_transitively_count`. Stopping the walk
-at the limit instead would leave nothing downstream able to tell a page from
-the whole closure — the caller would slice it against its own limit and,
-finding it no longer, report it as everything there was.
-
 ---
 
 ## 6. Source, in small pieces
@@ -453,21 +443,7 @@ reactions from a reviewer. Nothing in `possible` is claimed as affected.
 A type has no callers, so asking about a class reaches the program through the
 declarations that name it. That is the difference between an impact query that
 answers "nothing is affected" for every class in the project and one that
-answers the question.
-
-A bucket the limit stopped is named in `truncated`, because a bucket holding
-exactly `limit` entries cannot be told from a complete one by looking at it:
-
-```json
-{"direct": [...10 entries...], "truncated": ["direct", "possible"], ...}
-```
-
-Named per bucket rather than as one flag: the buckets are not equally certain,
-and neither is the confidence in each being complete. An impact analysis that
-quietly drops the forty-first caller is the one answer this tool must not give,
-since it is asked precisely when somebody is deciding whether a change is safe.
-`get_changed_symbols` carries the same key, inherited from the per-symbol
-reports it merges.
+answers the question:
 
 ### `get_changed_symbols`
 
@@ -514,11 +490,9 @@ Where the analysis could not see the whole translation unit.
  "note": "errors and warnings the compiler raised while indexing; constructs guarded by a failed declaration may be absent from the graph"}
 ```
 
-`count` is how many the index holds and `diagnostics` is how many are shown;
-the two differing is the answer, not a discrepancy. A file the compiler
-rejected contributes the declarations it got through and nothing behind the
-error point. This tool is how an agent distinguishes "that symbol does not
-exist" from "that symbol is behind a broken build".
+A file the compiler rejected contributes the declarations it got through and
+nothing behind the error point. This tool is how an agent distinguishes "that
+symbol does not exist" from "that symbol is behind a broken build".
 
 ---
 
