@@ -31,8 +31,12 @@ get_symbol("src/usage.cpp:32")     ->  the caller
 **A list that has been cut says so, and carries its true length.**
 
 ```json
-{"callers": [...10 entries...], "caller_count": 3406}
+{"callers": [...10 entries...], "caller_count": 3606}
 ```
+
+The 3606 is real: it is `get_callers` on `testing::internal::CodeLocation::CodeLocation`
+in the googletest index, asked with `limit: 10`, and the count is the whole list
+rather than the page.
 
 `find_symbol` and `search_symbols` add `more: true` instead, because there they
 report a page of a search rather than a bounded list; the count-shaped tools
