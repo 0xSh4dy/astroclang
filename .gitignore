@@ -1,0 +1,37 @@
+# Build output
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.so.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Index artifacts produced by the tool
+.cpp-code-graph/
+*.ccg.db
+*.ccg.db-journal
+*.ccg.db-wal
+
+# Test scratch space
+tests/tmp/
+tests/**/compile_commands.json
+tests/**/.cpp-code-graph/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Evaluation scratch output (generated, large)
+eval-out/
