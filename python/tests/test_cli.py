@@ -8,16 +8,22 @@ the two entry points reach the same code.
 """
 
 import contextlib
+import http.client
 import io
 import json
 import os
+import select
 import shutil
+import socket
 import subprocess
 import sys
 import unittest
+import urllib.parse
 from pathlib import Path
+from unittest import mock
 
 from astroclang import cli, indexer
+from astroclang.mcp_server import Server
 from astroclang.query import Query
 from astroclang.store import Store, default_db_path, read_meta
 
@@ -60,6 +66,20 @@ class CliCase(Fixture):
 
     def cli(self, *argv):
         return run(["--db", str(self.db), *argv])
+
+    def serve_until_stdin_closes(self, *argv):
+        """Run `mcp` to completion with no client on the other end.
+
+        It takes the whole argument list, unlike `cli`: its callers are asking
+        what the process was told, so the `--db` they pass is part of what they
+        are asserting rather than boilerplate for a helper to supply.
+        """
+        stdin = sys.stdin
+        try:
+            sys.stdin = io.StringIO("")
+            return run([*argv])
+        finally:
+            sys.stdin = stdin
 
 
 class TestStatuses(CliCase):
@@ -262,21 +282,12 @@ class TestMcpCommand(CliCase):
         answer = json.loads(replies[1]["result"]["content"][0]["text"])
         self.assertEqual(answer["callers"][0]["symbol"], "run")
 
-    def serve(self, *argv):
-        """Run `mcp` to completion with no client on the other end."""
-        stdin = sys.stdin
-        try:
-            sys.stdin = io.StringIO("")
-            return run([*argv])
-        finally:
-            sys.stdin = stdin
-
     def test_serving_says_so_on_stderr_before_it_waits(self):
         # stdout is the protocol channel, so stderr is the only place a person
         # running this by hand can see that the server came up at all.  It
         # used to print nothing anywhere, which reads as a hang - and the
         # documentation already promised diagnostics on stderr.
-        status, out, err = self.serve("--db", str(self.db), "mcp", str(self.root))
+        status, out, err = self.serve_until_stdin_closes("--db", str(self.db), "mcp", str(self.root))
         self.assertEqual(status, cli.OK)
         self.assertEqual(out, "", "a banner on stdout would corrupt the stream")
         self.assertIn("tools, index", err)
@@ -288,9 +299,80 @@ class TestMcpCommand(CliCase):
         # may never come is the same failure as saying nothing.
         empty = self.root / "unindexed"
         empty.mkdir()
-        status, _, err = self.serve("mcp", str(empty))
+        status, _, err = self.serve_until_stdin_closes("mcp", str(empty))
         self.assertEqual(status, cli.OK)
         self.assertIn("there is no index", err)
+
+
+class TestTheHttpOptions(CliCase):
+    """What `--http` hands the transport, short of opening a socket.
+
+    The transport itself has its own tests; what is checked here is the wiring
+    between the arguments and it, which nothing else crosses - a dropped host
+    or a forgotten promise about threads would otherwise go unnoticed until a
+    client hit it.
+    """
+
+    def serve_http(self, *argv):
+        """Run `mcp --http` with the transport stubbed out.
+
+        Returns what each collaborator was handed.  The call records are read
+        inside the `with`, because leaving it restores the real functions and
+        the records go with them.
+        """
+        with mock.patch.object(cli.http_server, "serve_http",
+                               return_value=cli.OK) as serve, \
+                mock.patch.object(cli, "open_index",
+                                  return_value=Server()) as opened:
+            status, _, err = self.cli("--db", str(self.db), "mcp",
+                                      str(self.root), *argv)
+            return status, err, serve.call_args, opened.call_args
+
+    def test_the_flags_reach_the_transport(self):
+        status, _, given, _ = self.serve_http(
+            "--http", "--port", "0", "--host", "0.0.0.0",
+            "--allow-origin", "https://ci.example")
+        self.assertEqual(status, cli.OK)
+        self.assertEqual(given.kwargs["port"], 0)
+        self.assertEqual(given.kwargs["host"], "0.0.0.0")
+        self.assertEqual(given.kwargs["allow_origins"], ["https://ci.example"])
+
+    def test_the_index_is_opened_for_the_threads_that_will_use_it(self):
+        # Serving over HTTP with a store opened for one thread fails every
+        # request; `make_server` refuses to start rather than let that happen,
+        # so the flag has to be asked for here for the server to run at all.
+        _, _, _, opened = self.serve_http("--http", "--port", "0")
+        self.assertTrue(opened.kwargs["cross_thread"])
+
+    def test_stdio_keeps_the_index_to_itself(self):
+        with mock.patch.object(cli, "open_index",
+                               return_value=Server(missing="no index")) as opened:
+            self.serve_until_stdin_closes("--db", str(self.db), "mcp", str(self.root))
+        self.assertFalse(opened.call_args.kwargs["cross_thread"])
+
+    def test_a_port_already_in_use_fails_with_the_reason(self):
+        # Not a traceback: nothing is wrong with the program, and the person
+        # reading it wants to know which port and why.
+        with socket.socket() as taken:
+            taken.bind(("127.0.0.1", 0))
+            taken.listen(1)
+            port = taken.getsockname()[1]
+            status, _, err = self.cli("--db", str(self.db), "mcp",
+                                      str(self.root), "--http",
+                                      "--port", str(port))
+        self.assertEqual(status, cli.FAILED)
+        self.assertIn("cannot listen", err)
+        self.assertIn(str(port), err)
+
+    def test_http_serving_still_announces_what_it_is_serving(self):
+        # `_announce_mcp` belongs to both transports.  Skipping it on this one
+        # would put back the silence that made `astroclang mcp` look like a
+        # hang, on the transport where a person is most likely to be waiting
+        # for a port that never appears.
+        status, err, _, _ = self.serve_http("--http", "--port", "0")
+        self.assertEqual(status, cli.OK)
+        self.assertIn("tools, index", err)
+        self.assertEqual(err.count("astroclang mcp:"), 2)
 
 
 @unittest.skipIf(EXTRACTOR is None, "astroclang-index has not been built")
@@ -321,6 +403,54 @@ class TestInARealProcess(RepoCase):
         self.assertEqual(bad.returncode, cli.FAILED)
         self.assertEqual(bad.stdout, "")
         self.assertIn("more than one", bad.stderr)
+
+    def spawn(self, *argv):
+        env = dict(os.environ, PYTHONPATH=str(PYTHON_DIR),
+                   ASTROCLANG_INDEX=str(EXTRACTOR))
+        return subprocess.Popen([sys.executable, "-m", "astroclang", *argv],
+                                cwd=str(PYTHON_DIR), env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+
+    def test_the_http_transport_serves_a_real_socket(self):
+        # The stdio transport has its own process test above.  This is the
+        # other one, reached the way a client reaches it: a spawned process, a
+        # port it announced on stderr, and a request to that port.
+        self.call("--db", self.db(), "index", str(self.root), "--quiet")
+        process = self.spawn("--db", self.db(), "mcp", str(self.root),
+                             "--http", "--port", "0")
+        self.addCleanup(process.kill)
+        self.addCleanup(process.stderr.close)
+        self.addCleanup(process.stdout.close)
+
+        # The loop tests the line it read, not what `partition` returned: the
+        # separator is dropped from the remainder, so asking the remainder for
+        # "listening on " can never come true and the read below blocks on a
+        # server that is working perfectly.
+        announced = ""
+        while not announced:
+            line = process.stderr.readline()
+            if not line:
+                self.fail("the server stopped before it announced a port")
+            _, found, announced = line.partition("listening on ")
+        parts = urllib.parse.urlsplit(announced.strip())
+
+        connection = http.client.HTTPConnection(parts.hostname, parts.port,
+                                                timeout=10)
+        self.addCleanup(connection.close)
+        connection.request("POST", parts.path,
+                           body=json.dumps({"jsonrpc": "2.0", "id": 1,
+                                            "method": "tools/list"}),
+                           headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 200)
+        listed = json.loads(response.read())["result"]["tools"]
+        self.assertIn("get_callers", {t["name"] for t in listed})
+        # Nothing but the protocol goes to stdout, over either transport.  The
+        # process is still serving, so a read would block rather than answer:
+        # asking whether anything is waiting is the question being asserted.
+        readable, _, _ = select.select([process.stdout], [], [], 0)
+        self.assertEqual(readable, [], "a banner on stdout would corrupt the stream")
 
     def test_the_module_and_the_console_script_are_the_same_command(self):
         # `python -m astroclang` and the `astroclang` script both land

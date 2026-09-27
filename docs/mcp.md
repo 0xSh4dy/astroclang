@@ -1,11 +1,12 @@
 # The MCP interface
 
 `astroclang mcp` serves the index to a coding agent over the Model Context
-Protocol on stdio. This document is the reference for what it exposes.
+Protocol. This document is the reference for what it exposes.
 
 ```sh
 astroclang index /path/to/project     # build the index
 astroclang mcp /path/to/project       # serve it on stdio
+astroclang mcp --http                 # ... or over Streamable HTTP
 astroclang mcp --list-tools           # print the surface as JSON, serve nothing
 ```
 
@@ -603,3 +604,52 @@ stderr — the lines naming the index it opened, and any exception raised while
 answering a request — because that is where a host's log capture looks. It is
 also why `astroclang mcp` run by hand prints a few lines and then appears to do
 nothing: it is waiting for a client on stdin.
+
+### Serving it over HTTP instead
+
+stdio is the right transport for a client that can spawn a process, which is
+most of them. It is the wrong one when the client cannot: a host in another
+container, an editor on another machine, or one client holding a connection to
+several servers. `--http` serves the same surface over the MCP Streamable HTTP
+transport, on a single endpoint:
+
+```sh
+astroclang mcp /path/to/project --http                      # 127.0.0.1:8765/mcp
+astroclang mcp /path/to/project --http --port 0             # any free port, printed
+astroclang mcp /path/to/project --http --host 0.0.0.0 --port 9000
+```
+
+The port it ended up on is printed on stderr, so `--port 0` is a usable way to
+avoid choosing one. A client is pointed at the URL:
+
+```json
+{"mcpServers": {"astroclang": {
+  "type": "http",
+  "url": "http://127.0.0.1:8765/mcp"
+}}}
+```
+
+The server answers a message with `application/json`, replies `202` with no body
+to a notification — there is nothing to say back to one — and refuses `GET` and
+`DELETE` with `405` and an `Allow: POST` header, since it has no server-initiated
+stream and sessions to end.
+
+**It is a local port, and it is checked.** A server listening on loopback is
+reachable by every page the browser has open, so a request carrying an `Origin`
+is refused unless that origin is loopback or named on the command line. That is
+what `--allow-origin` is for, and it is how the server is put behind a proxy or
+reached from a container without turning the check off:
+
+```sh
+astroclang mcp /path/to/project --http --allow-origin https://ci.example
+```
+
+A client that sends no `Origin` — the SDK, `curl` — is not asked for one: only a
+browser sends it, and only a browser is the attack.
+
+Unlike stdio, this transport answers each request on its own thread, so the index
+is opened for cross-thread use and the requests are serialised behind one lock.
+The wait that costs is measured in microseconds over a local file. `--http`
+takes care of it; a store opened without it is refused at startup rather than
+failing every request with a SQLite error that reads as a bug in the query
+layer.

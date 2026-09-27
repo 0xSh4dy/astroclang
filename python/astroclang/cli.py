@@ -24,7 +24,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import git as git_mod, indexer, tools
+from . import git as git_mod, http_server, indexer, tools
 from .mcp_server import open_index, serve_stdio
 from .query import Query
 from .store import DEFAULT_INDEX_DIR, Store, default_db_path, read_meta
@@ -287,6 +287,19 @@ def _parser() -> argparse.ArgumentParser:
                      help="project root (default: the current directory)")
     mcp.add_argument("--list-tools", action="store_true",
                      help="print the tool surface and exit, without serving")
+    mcp.add_argument("--http", action="store_true",
+                     help="listen on HTTP instead of reading stdin")
+    mcp.add_argument("--host", default=http_server.DEFAULT_HOST, metavar="ADDR",
+                     help=f"address to bind with --http (default: "
+                          f"{http_server.DEFAULT_HOST}, this machine only)")
+    mcp.add_argument("--port", type=int, default=http_server.DEFAULT_PORT,
+                     metavar="N",
+                     help=f"port to bind with --http (default: "
+                          f"{http_server.DEFAULT_PORT}; 0 picks a free one)")
+    mcp.add_argument("--allow-origin", action="append", default=None,
+                     metavar="ORIGIN",
+                     help="also accept this Origin, for a client that is not "
+                          "on this machine (repeatable)")
 
     for name, command in COMMANDS.items():
         doc = sub.add_parser(name, help=command.summary)
@@ -409,6 +422,9 @@ def _announce_mcp(db: Path, root: Path, server) -> None:
     anything at all and cannot tell a working server from a hang.  The same
     lines land in a client's log capture, which is where they are wanted when
     the server is spawned rather than typed.
+
+    Only what is being served, not how: the transport adds its own line, since
+    only it knows the port it ended up on.
     """
     if server.missing:
         _progress(f"{PROGRAM} mcp: {server.missing}")
@@ -417,8 +433,6 @@ def _announce_mcp(db: Path, root: Path, server) -> None:
     else:
         _progress(f"{PROGRAM} mcp: {len(tools.describe())} tools, index {db}")
         _progress(f"{PROGRAM} mcp: root {root}")
-    _progress(f"{PROGRAM} mcp: JSON-RPC on stdin/stdout, diagnostics here on "
-              f"stderr; waiting for a client")
 
 
 def cmd_mcp(args) -> int:
@@ -430,9 +444,20 @@ def cmd_mcp(args) -> int:
     root = _project_root(db, Path(args.root or ".").resolve())
     # `_progress` is also the server's log sink, so an exception raised while
     # answering a request leaves a trace on stderr instead of vanishing into
-    # an error reply the client may never show anyone.
-    server = open_index(db, root=root, log=_progress)
+    # an error reply the client may never show anyone.  The same sink carries
+    # HTTP request lines, which is why the file they are written to is the one
+    # a person is already watching.
+    server = open_index(db, root=root, log=_progress,
+                        # Only HTTP answers on more than one thread; the stdio
+                        # transport keeps the store to itself.
+                        cross_thread=args.http)
     _announce_mcp(db, root, server)
+    if args.http:
+        return http_server.serve_http(
+            server, host=args.host, port=args.port, log=_progress,
+            allow_origins=args.allow_origin or ())
+    _progress(f"{PROGRAM} mcp: JSON-RPC on stdin/stdout, diagnostics here on "
+              f"stderr; waiting for a client")
     return serve_stdio(server)
 
 

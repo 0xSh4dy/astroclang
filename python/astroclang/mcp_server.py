@@ -227,20 +227,26 @@ class Server:
         return True
 
 
-def open_index(db_path, root=None, missing: str = "", log=None) -> Server:
+def open_index(db_path, root=None, missing: str = "", log=None,
+               cross_thread: bool = False) -> Server:
     """A server for an existing index, or one that explains its absence.
 
     `log` is where an unexpected exception goes on its way out.  It is passed
     through rather than defaulted here because the server never writes to
     stderr itself: stdout is the protocol, and a library that decided on its
     own where a diagnostic belongs would have made that choice for its host.
+
+    `cross_thread` is for a transport that answers on more than one thread, and
+    it is the caller's promise to serialise: it says the store may be reached
+    from a thread other than this one, not that reaching it is safe.
     """
     path = Path(db_path)
     if not path.is_file():
         return Server(missing=missing or (
             f"there is no index at {path}; build one with "
             f"`astroclang index`"), log=log)
-    store = Store(path, project_root=Path(root) if root else None)
+    store = Store(path, project_root=Path(root) if root else None,
+                  cross_thread=cross_thread)
     return Server(query=Query(store), store=store, log=log)
 
 

@@ -48,7 +48,18 @@ def read_meta(path: Path, key: str) -> Optional[str]:
 
 
 class Store:
-    def __init__(self, path: Path, project_root: Optional[Path] = None):
+    def __init__(self, path: Path, project_root: Optional[Path] = None,
+                 cross_thread: bool = False):
+        """`cross_thread` lets the connection be used from a thread that did not
+        open it, which the HTTP transport needs: it answers each request on its
+        own thread.  SQLite refuses that by default, and the flag is only safe
+        because that caller serialises access itself - so it is off here, where
+        nothing else would hold the other end of the bargain.
+
+        It is kept on the instance so a transport can check the promise was
+        made before it starts answering, rather than discovering it one failed
+        request at a time."""
+        self.cross_thread = cross_thread
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.project_root = Path(project_root).resolve() if project_root else None
@@ -60,7 +71,8 @@ class Store:
         # thousand statements reading a table that fits in a few kilobytes.
         self._file_path_cache: Dict[int, str] = {}
         self._in_project_cache: Dict[int, bool] = {}
-        self._conn = sqlite3.connect(str(self.path))
+        self._conn = sqlite3.connect(str(self.path),
+                                     check_same_thread=not cross_thread)
         self._conn.row_factory = sqlite3.Row
         # WAL keeps a long re-index from blocking reads, and the durability
         # trade is the right one here: a corrupt index is rebuilt from source,
