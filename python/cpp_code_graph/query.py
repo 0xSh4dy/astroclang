@@ -35,6 +35,11 @@ DEFAULT_IMPACT_LIMIT = 60
 # from fifty places does not need fifty lines of answer to say so.
 MAX_CALL_SITES = 5
 
+# How many are remembered at all.  The count stays exact; the list is only ever
+# read as a sample, so holding every site of a very hot function would spend
+# memory on something no answer quotes.
+MAX_TRACKED_SITES = 200
+
 
 @dataclass
 class SymbolRef:
@@ -323,27 +328,47 @@ class Query:
                limit: int, include_system: bool = False,
                with_usr: bool = False) -> List[Dict[str, Any]]:
         col, other = ("dst", "src") if direction == "in" else ("src", "dst")
+        marks = ",".join("?" * len(kinds))
+
+        # Which symbols, first.  The limit is a limit on the answer - how many
+        # callers to name - so it applies to the symbols and not to the rows of
+        # evidence behind them.  A call written in a header is reported by every
+        # translation unit that includes the header, so a limit on rows would
+        # spend the whole budget on one caller and hide the rest.
+        find = (f"SELECT DISTINCT e.{other} AS u FROM raw_edge e"
+                f" JOIN symbol s ON s.usr = e.{other}"
+                f" WHERE e.{col} = ? AND e.kind IN ({marks})")
+        params: List[Any] = [usr, *kinds]
+        if not include_system:
+            find += " AND s.file_id IN (SELECT id FROM file WHERE in_project = 1)"
+        find += " ORDER BY s.qualified LIMIT ?"
+        params.append(limit)
+        targets = [r["u"] for r in self.conn.execute(find, params)]
+        if not targets:
+            return []
+
+        # Then the evidence: one row per call site rather than one per
+        # translation unit.  Two translation units reporting the same file and
+        # line are reporting one call, and saying so twice would both double the
+        # count and read as a second call that was never made.
+        #
         # The edge columns are aliased because `s.*` also has `kind`, `file_id`,
         # `line` and `flags`; without the prefix the edge's values win the name
         # lookup and a caller comes back labelled with the edge kind instead of
         # its own.
-        q = f"""
-            SELECT e.{other} AS other_usr, e.file_id AS efile, e.line AS eline,
-                   e.kind AS ekind, e.flags AS eflags, e.weight AS eweight, s.*
-            FROM raw_edge e
-            JOIN symbol s ON s.usr = e.{other}
-            WHERE e.{col} = ? AND e.kind IN ({",".join("?" * len(kinds))})
-            ORDER BY e.kind, s.qualified, e.line
-            LIMIT ?
-        """
-        # Edges are stored per translation unit, and a header included by two
-        # hundred files reports its relationships two hundred times.  Folding
-        # by target here is what keeps "what derives from Base" a list of
-        # classes rather than a list of inclusion events.
+        rows = self.conn.execute(
+            f"SELECT e.{other} AS other_usr, e.file_id AS efile, e.line AS eline,"
+            f" e.kind AS ekind, e.flags AS eflags, MAX(e.weight) AS eweight, s.*"
+            f" FROM raw_edge e JOIN symbol s ON s.usr = e.{other}"
+            f" WHERE e.{col} = ? AND e.kind IN ({marks})"
+            f" AND e.{other} IN ({','.join('?' * len(targets))})"
+            f" GROUP BY e.{other}, e.file_id, e.line, e.kind, e.flags"
+            f" ORDER BY s.qualified, e.line",
+            [usr, *kinds, *targets],
+        )
+
         folded: Dict[str, Dict[str, Any]] = {}
-        for r in self.conn.execute(q, [usr, *kinds, limit]):
-            if not include_system and not self._is_project_file(r["file_id"]):
-                continue
+        for r in rows:
             key = r["other_usr"]
             entry = folded.get(key)
             if entry is None:
@@ -352,6 +377,7 @@ class Query:
                 entry = self._ref_from_row(r, with_usr=with_usr)
                 entry["_weight"] = 0
                 entry["_sites"] = []
+                entry["_seen"] = set()
                 entry["_kinds"] = set()
                 folded[key] = entry
             entry["_weight"] += r["eweight"] or 1
@@ -362,12 +388,17 @@ class Query:
             if eflags.get("pure"):
                 entry["dispatch"] = "pure virtual"
             site = self.loc(r["efile"], r["eline"])
-            if site and site != entry.get("location") and site not in entry["_sites"]:
-                entry["_sites"].append(site)
+            # Counted exactly, kept bounded: a function called from ten
+            # thousand lines needs a count, not ten thousand entries.
+            if site and site not in entry["_seen"]:
+                entry["_seen"].add(site)
+                if len(entry["_sites"]) < MAX_TRACKED_SITES:
+                    entry["_sites"].append(site)
 
         out = []
         for entry in folded.values():
             sites = entry.pop("_sites")
+            count = len(entry.pop("_seen"))
             weight = entry.pop("_weight")
             ekinds = entry.pop("_kinds")
             # The edge carries the call site; the symbol carries the
@@ -375,13 +406,16 @@ class Query:
             # so the call site is reported as its own field - capped, because a
             # function called from fifty places does not need fifty lines of
             # answer to say so.
-            if len(sites) == 1:
+            if count == 1:
                 entry["call_site"] = sites[0]
-            elif sites:
+            elif count:
                 entry["call_sites"] = sites[:MAX_CALL_SITES]
-                if len(sites) > MAX_CALL_SITES:
-                    entry["call_site_count"] = len(sites)
-            if weight > 1:
+                if count > MAX_CALL_SITES:
+                    entry["call_site_count"] = count
+            # Only when it says something the call sites do not: the same place
+            # calling this more than once, which is a loop rather than a
+            # separate use.
+            if weight > count:
                 entry["occurrences"] = weight
             if ekinds != {kinds[0]}:
                 entry["via"] = sorted(ekinds)
@@ -916,8 +950,12 @@ class Query:
 
     def symbol_dependencies(self, usr: str, limit: int = 200
                             ) -> Dict[str, Any]:
+        # Distinct, because a type relationship declared in a header is
+        # reported by every translation unit that includes the header: without
+        # it, a class's dependencies are listed once per compilation.
         rows = self.conn.execute(
-            "SELECT e.kind, s.* FROM raw_edge e JOIN symbol s ON s.usr = e.dst"
+            "SELECT DISTINCT e.kind, s.* FROM raw_edge e"
+            " JOIN symbol s ON s.usr = e.dst"
             " WHERE e.src = ? AND e.kind IN (%s)"
             " ORDER BY e.kind, s.qualified LIMIT ?"
             % ",".join("?" * len(DEPENDENCY_EDGES)),

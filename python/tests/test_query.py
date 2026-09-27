@@ -264,12 +264,8 @@ class TestEdges(Fixture):
         self.assertEqual([d["symbol"] for d in tree["derived"]],
                          ["mem::Fast", "mem::Fast2"])
 
-    def test_call_sites_are_collected_rather_than_repeated(self):
-        # An inline function defined in a header is compiled into every
-        # translation unit that includes it, so its call to `size` is reported
-        # once per includer.  The same call, seen twice, is still one call from
-        # one caller - not two callers.
-        target = self.usr("mem::Allocator::size")
+    def _inline_caller(self, target, weight=1, sites=(31,)):
+        """The same header function, seen by two translation units."""
         for name in ("a.cpp", "b.cpp"):
             path = self.root / "src" / name
             self.store.ingest(TranslationUnit(
@@ -280,18 +276,65 @@ class TestEdges(Fixture):
                              "inline_size", "mem::Helper::inline_size", "()",
                              file=1, line=30)],
                 edges=[edge("calls", "c:@N@mem@S@Helper@F@inline_size", target,
-                            file=1, line=31)],
+                            file=1, line=line, weight=weight)
+                       for line in sites],
             ))
         self.store.rebuild_symbols()
-        callers = [c for c in self.q.callers(target)
-                   if c["symbol"] == "mem::Helper::inline_size"]
+        return [c for c in self.q.callers(target)
+                if c["symbol"] == "mem::Helper::inline_size"]
+
+    def test_call_sites_are_collected_rather_than_repeated(self):
+        # An inline function defined in a header is compiled into every
+        # translation unit that includes it, so its call to `size` is reported
+        # once per includer.  The same call, seen twice, is still one call from
+        # one caller - not two callers.
+        callers = self._inline_caller(self.usr("mem::Allocator::size"))
         self.assertEqual(len(callers), 1)
-        # Counted twice, sited once: the two translation units are reporting
-        # the same line, and saying so twice would be noise.
-        self.assertEqual(callers[0]["occurrences"], 2)
         self.assertEqual(callers[0]["location"], "include/iface.h:30")
         self.assertEqual(callers[0]["call_site"], "include/iface.h:31")
         self.assertNotIn("call_sites", callers[0])
+
+    def test_one_call_seen_by_two_translation_units_is_still_one_call(self):
+        # The two reports are of one call at one line.  Summing them would say
+        # the function calls `size` twice, which is false, and a reader asking
+        # how hot a call is would be told the answer is a property of how many
+        # files happened to be compiled.
+        callers = self._inline_caller(self.usr("mem::Allocator::size"))
+        self.assertNotIn("occurrences", callers[0])
+
+    def test_a_repeated_call_is_counted_once_per_line_not_once_per_compile(self):
+        # Here the call really is made twice - the extractor folded both into
+        # one row - and both translation units agree on that.  Four would be
+        # the number of compilations, not the number of calls.
+        callers = self._inline_caller(self.usr("mem::Allocator::size"),
+                                      weight=2)
+        self.assertEqual(callers[0]["occurrences"], 2)
+
+    def test_a_caller_with_many_sites_does_not_crowd_out_the_others(self):
+        # The limit says how many callers to name.  A caller that calls the
+        # target from sixty lines must not spend the whole budget on itself and
+        # leave the other caller unmentioned.
+        target = self.usr("mem::Allocator::size")
+        path = self.root / "src" / "many.cpp"
+        other = self.root / "src" / "other.cpp"
+        self.store.ingest(TranslationUnit(
+            path=str(path), complete=True,
+            files=[FileFact(0, str(path), False),
+                   FileFact(1, str(other), False)],
+            symbols=[sym("c:@F@many", "function", "many", "many", "()", file=0,
+                         line=1),
+                     sym("c:@F@run", "function", "run", "run", "()", file=1,
+                         line=1)],
+            edges=[edge("calls", "c:@F@many", target, file=0, line=10 + i)
+                   for i in range(60)]
+            + [edge("calls", "c:@F@run", target, file=1, line=2)],
+        ))
+        self.store.rebuild_symbols()
+        names = {c["symbol"] for c in self.q.callers(target, limit=2)}
+        self.assertEqual(names, {"many", "run"})
+        entry = next(c for c in self.q.callers(target) if c["symbol"] == "many")
+        self.assertEqual(entry["call_site_count"], 60)
+        self.assertEqual(len(entry["call_sites"]), 5)
 
     def test_a_caller_with_many_call_sites_summarises_them(self):
         # A function called from more than a handful of places does not need a
@@ -560,6 +603,30 @@ class TestFileContents(Fixture):
         kinds = {s["kind"] for s in self.q.file_symbols("include/iface.h",
                                                        kind="class")}
         self.assertEqual(kinds, {"class"})
+
+
+class TestDependencies(Fixture):
+    def test_a_dependency_declared_in_a_header_is_listed_once(self):
+        # A type relationship written in a header is reported by every
+        # translation unit that includes the header, so the same dependency
+        # arrives once per compilation.  Listing it once per compilation turns
+        # "what does this function need" into a list of build events.
+        target = self.usr("mem::Allocator")
+        hdr = self.hdr_path()
+        for name in ("a.cpp", "b.cpp"):
+            path = self.root / "src" / name
+            self.store.ingest(TranslationUnit(
+                path=str(path), complete=True,
+                files=[FileFact(0, str(path), False),
+                       FileFact(1, str(hdr), False)],
+                symbols=[sym("c:@F@user", "function", "user", "user", "()",
+                             file=1, line=30)],
+                edges=[edge("param_type", "c:@F@user", target, file=1, line=6)],
+            ))
+        self.store.rebuild_symbols()
+        deps = self.q.symbol_dependencies(self.usr("user"))
+        self.assertEqual([d["symbol"] for d in deps["param_type"]],
+                         ["mem::Allocator"])
 
 
 if __name__ == "__main__":
