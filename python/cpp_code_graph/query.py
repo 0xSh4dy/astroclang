@@ -422,6 +422,24 @@ class Query:
             out.append(entry)
         return out
 
+    def degree(self, usr: str, kinds: Sequence[str] = CALL_EDGES,
+               direction: str = "in", include_system: bool = False) -> int:
+        """How many distinct symbols are on the other end of these edges.
+
+        Distinct, because an edge is recorded once per translation unit that
+        could see it: counting rows would report the size of the build rather
+        than the number of relationships.  This is the count a summary wants -
+        it is exact, and it costs one indexed query rather than a list.
+        """
+        col, other = ("dst", "src") if direction == "in" else ("src", "dst")
+        q = (f"SELECT COUNT(DISTINCT e.{other}) FROM raw_edge e"
+             f" JOIN symbol s ON s.usr = e.{other}"
+             f" WHERE e.{col} = ? AND e.kind IN ({','.join('?' * len(kinds))})")
+        args: List[Any] = [usr, *kinds]
+        if not include_system:
+            q += " AND s.file_id IN (SELECT id FROM file WHERE in_project = 1)"
+        return self.conn.execute(q, args).fetchone()[0]
+
     def callers(self, usr: str, limit: int = DEFAULT_CALLER_LIMIT,
                 include_system: bool = False,
                 with_usr: bool = False) -> List[Dict[str, Any]]:

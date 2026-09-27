@@ -38,6 +38,11 @@ class Store:
         # never recovered from.
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA synchronous = NORMAL")
+        # The server reads this file while another process may be rebuilding
+        # it.  Waiting for the writer is the right answer to a locked index:
+        # the alternative is failing a query that would have succeeded a
+        # moment later.
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(DDL)
         self._conn.execute(
@@ -278,6 +283,16 @@ class Store:
                 " ORDER BY f.path"
             )
         )
+
+    def get_meta(self, key: str) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+        self._conn.commit()
 
     def stats(self) -> Dict[str, int]:
         c = self._conn

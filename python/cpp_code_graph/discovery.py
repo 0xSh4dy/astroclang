@@ -28,6 +28,22 @@ SOURCE_EXTENSIONS = (".c", ".cc", ".cpp", ".cxx", ".c++", ".m", ".mm")
 HEADER_EXTENSIONS = (".h", ".hh", ".hpp", ".hxx", ".h++", ".inc", ".inl",
                      ".ipp", ".tcc", ".tpp")
 
+# What a suffix says about a file.  The suffix is not a language, but for a
+# source file it is the one the compiler was told to accept, which is the same
+# thing.  A header is deliberately absent: `.h` is C or C++, and which one is
+# decided by whoever includes it, not by its name.
+LANGUAGE_BY_SUFFIX = {
+    ".c": "c",
+    ".cc": "c++", ".cpp": "c++", ".cxx": "c++", ".c++": "c++",
+    ".m": "objective-c", ".mm": "objective-c++",
+}
+
+
+def language_of(path) -> str:
+    """The language a source file is compiled as, or "" when it does not say."""
+    return LANGUAGE_BY_SUFFIX.get(Path(path).suffix.lower(), "")
+
+
 # Directories never worth walking: version control metadata and caches, which
 # hold no source of the project's own.
 #

@@ -37,12 +37,25 @@ except indexer.ExtractorNotFound:
     EXTRACTOR = None
 
 
-@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
-class Corpus(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls._tmp = tempfile.TemporaryDirectory()
-        tmp = Path(cls._tmp.name)
+_INDEX = None
+
+
+def corpus_index():
+    """The corpus, indexed once however many test classes want it.
+
+    Indexing it per class would re-run the extractor over the whole corpus for
+    every suite that asserts against real parses, and the index is read-only
+    for all of them, so one build is shared.  Module cleanups are drained at
+    the end of each module, so this is one build per test module that uses it
+    rather than one per class within it.
+    """
+    global _INDEX
+    if _INDEX is None:
+        tmp = tempfile.TemporaryDirectory()
+        # Registered before the store, so that the store is closed first: the
+        # cleanups run in the order they were added, reversed.
+        unittest.addModuleCleanup(tmp.cleanup)
+        root = Path(tmp.name)
 
         # Paths inside the command are relative to `directory`, which is what a
         # hand-written or Meson-generated database looks like; CMake writes
@@ -58,18 +71,29 @@ class Corpus(unittest.TestCase):
                 "file": str(path),
                 "command": " ".join([*flags, "src/" + path.name]),
             })
-        compdb = tmp / "compile_commands.json"
+        compdb = root / "compile_commands.json"
         compdb.write_text(json.dumps(commands))
 
-        cls.store = Store(tmp / "index.db", project_root=CORPUS)
-        cls.report = index_project(CORPUS, cls.store, extractor=EXTRACTOR,
-                                   compdb=compdb)
-        cls.q = Query(cls.store)
+        store = Store(root / "index.db", project_root=CORPUS)
+        report = index_project(CORPUS, store, extractor=EXTRACTOR,
+                               compdb=compdb)
+        _INDEX = (store, Query(store), report)
+        unittest.addModuleCleanup(_cleanup_index)
+    return _INDEX
 
+
+def _cleanup_index() -> None:
+    global _INDEX
+    if _INDEX is not None:
+        _INDEX[0].close()
+        _INDEX = None
+
+
+@unittest.skipIf(EXTRACTOR is None, "cg-index has not been built")
+class Corpus(unittest.TestCase):
     @classmethod
-    def tearDownClass(cls):
-        cls.store.close()
-        cls._tmp.cleanup()
+    def setUpClass(cls):
+        cls.store, cls.q, cls.report = corpus_index()
 
     # -- helpers -------------------------------------------------------------
 
