@@ -506,8 +506,12 @@ class Query:
 
     # -- inheritance ---------------------------------------------------------
 
-    def inheritance(self, usr: str, transitive: bool = True
-                    ) -> Dict[str, Any]:
+    def inheritance(self, usr: str, transitive: bool = True,
+                    with_usr: bool = False) -> Dict[str, Any]:
+        """`with_usr` is for callers that mean to keep walking from these
+        entries - `impact` seeds its frontier from them.  It defaults off
+        because every entry already carries `file:line`, which resolves exactly
+        and costs a fraction of a USR."""
         out: Dict[str, Any] = {"bases": [], "derived": []}
         # Deduplicated by USR: a base clause in a header is re-reported by
         # every translation unit that includes it.
@@ -516,7 +520,7 @@ class Query:
             for r in self.conn.execute(sql, args):
                 entry = seen.get(r["usr"])
                 if entry is None:
-                    entry = self._ref_from_row(r)
+                    entry = self._ref_from_row(r, with_usr=with_usr)
                     seen[r["usr"]] = entry
                 f = _flags(r["eflags"])
                 if f.get("acc"):
@@ -539,7 +543,7 @@ class Query:
         for r in self.conn.execute(
                 "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.src"
                 " WHERE e.kind = 'instantiates' AND e.dst = ?", (usr,)):
-            entry = self._ref_from_row(r)
+            entry = self._ref_from_row(r, with_usr=with_usr)
             entry["via_template"] = True
             if entry["symbol"] not in [d["symbol"] for d in out["derived"]]:
                 out["derived"].append(entry)
@@ -560,10 +564,10 @@ class Query:
 
         out["overrides"] = self._distinct(
             "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.src"
-            " WHERE e.kind = 'overrides' AND e.dst = ?", (usr,))
+            " WHERE e.kind = 'overrides' AND e.dst = ?", (usr,), with_usr)
         out["overridden"] = self._distinct(
             "SELECT s.* FROM raw_edge e JOIN symbol s ON s.usr = e.dst"
-            " WHERE e.kind = 'overrides' AND e.src = ?", (usr,))
+            " WHERE e.kind = 'overrides' AND e.src = ?", (usr,), with_usr)
 
         # `overrides` edges point at the method actually overridden, so a
         # three-level hierarchy - Tagged::area over Circle::area over
@@ -577,12 +581,13 @@ class Query:
             out["overrides_indirectly"] = deeper
         return {k: v for k, v in out.items() if v}
 
-    def _distinct(self, sql: str, args) -> List[Dict[str, Any]]:
+    def _distinct(self, sql: str, args,
+                  with_usr: bool = False) -> List[Dict[str, Any]]:
         """One entry per distinct symbol, in the order the query returned them."""
         seen: Dict[str, Dict[str, Any]] = {}
         for row in self.conn.execute(sql, args):
             if row["usr"] not in seen:
-                seen[row["usr"]] = self._ref_from_row(row)
+                seen[row["usr"]] = self._ref_from_row(row, with_usr=with_usr)
         return list(seen.values())
 
     def _transitive(self, usr: str, kind: str, direction: str,
@@ -964,10 +969,25 @@ class Query:
         if target is None:
             return {}
 
-        inherits = self.inheritance(usr)
+        inherits = self.inheritance(usr, with_usr=True)
         direct: Dict[str, Dict[str, Any]] = {}
         indirect: Dict[str, Dict[str, Any]] = {}
         possible: Dict[str, Dict[str, Any]] = {}
+
+        # The traversal below needs the stable id, and the entries are keyed by
+        # display name because that is what a reader recognises.  So the USRs
+        # are collected separately as the entries are made, rather than read
+        # back off them afterwards: two overloads share a display name, and one
+        # of them would be lost to the key collision if the frontier were built
+        # from the dictionary.
+        frontier: List[str] = []
+        seen: Set[str] = {usr}
+
+        def seed(entry: Dict[str, Any]) -> None:
+            u = entry.get("usr")
+            if u and u not in seen:
+                seen.add(u)
+                frontier.append(u)
 
         def add(bucket: Dict[str, Dict[str, Any]], entry: Dict[str, Any],
                 reason: str) -> None:
@@ -998,22 +1018,38 @@ class Query:
                 cut.add(bucket)
 
         # -- direct: the index records this dependency ------------------------
-        callers = self.callers(usr, limit=budget)
+        callers = self.callers(usr, limit=budget, with_usr=True)
         took(callers, "direct")
         for entry in callers:
             add(direct, entry, "calls this symbol")
+            seed(entry)
 
         for entry in inherits.get("derived", []):
             add(direct, entry, "derives from this type")
+            seed(entry)
 
         # Referencing a variable, field or type is a real dependency: change
         # the type and every one of these uses is affected immediately.  A
         # callable is different, and is handled below.
         if not _is_callable(target["kind"]):
-            uses = self._edges(usr, ("references",), "in", budget)
+            uses = self._edges(usr, ("references",), "in", budget,
+                               with_usr=True)
             took(uses, "direct")
             for entry in uses:
                 add(direct, entry, "uses this symbol")
+                seed(entry)
+
+        # A type reaches the rest of the program through declarations that name
+        # it, not through calls.  Somewhere between "everything that mentions
+        # this class" and "everything that calls this method" is exactly where
+        # a reviewer needs the answer, and a graph with type edges but an impact
+        # query that ignores them would report an empty impact for every class,
+        # enum and typedef in the project while its documentation claimed
+        # otherwise.
+        for kind, reason in TYPE_EDGES:
+            for entry in self._edges(usr, (kind,), "in", limit, with_usr=True):
+                add(direct, entry, reason)
+                seed(entry)
 
         # -- possible: it depends on run-time behaviour ----------------------
         for entry in inherits.get("overrides", []):
@@ -1055,16 +1091,11 @@ class Query:
             add(possible, entry, "is an instantiation of this template")
 
         # -- indirect: callers of callers -------------------------------------
-        # `direct` is keyed by display name; the traversal needs the stable id,
-        # so it walks a parallel frontier of USRs.
-        seen: Set[str] = {usr}
-        frontier: List[str] = []
-        for entry in list(direct.values()):
-            entry_usr = entry.get("usr")
-            if entry_usr and entry_usr not in seen:
-                seen.add(entry_usr)
-                frontier.append(entry_usr)
-
+        # `frontier` was built as the direct entries were made.  It used to be
+        # read back off them here, from an entry field that the queries above
+        # never asked for - so it was always empty, and this bucket was empty
+        # with it.  Nothing failed: an impact analysis that reports no indirect
+        # callers reads exactly like one for a symbol that has none.
         for hop in range(2, depth + 1):
             nxt: List[str] = []
             for caller_usr in frontier:
@@ -1089,6 +1120,14 @@ class Query:
                 # show, so the walk stops - and says it stopped.
                 cut.add("indirect")
                 break
+
+        # The USRs have done their work.  Every entry already carries
+        # `file:line`, which resolves exactly and costs three tokens against a
+        # USR's ten, so they are dropped rather than shipped to a reader who
+        # has no use for them.
+        for bucket in (direct, indirect, possible):
+            for entry in bucket.values():
+                entry.pop("usr", None)
 
         report = {
             "symbol": target["qualified"] or target["name"],
@@ -1290,6 +1329,19 @@ CALLABLE_KINDS = ("function", "method", "constructor", "destructor",
 
 # Kinds whose extent is their body rather than their first line.
 _CONTAINER_KINDS = ("namespace", "class", "struct")
+
+# Edges that mean "this declaration names that type".  They point outward from
+# the declaration, so reading them backwards answers "who would have to change
+# if this type changed" - which is how a class change usually propagates, and
+# involves no call at all.  Each is paired with the sentence that explains it
+# to a reader, because "param_type" is not an explanation.
+TYPE_EDGES = (
+    ("param_type", "takes this type as a parameter"),
+    ("returns", "returns this type"),
+    ("field_type", "holds this type in a field"),
+    ("var_type", "declares a variable of this type"),
+    ("aliases", "names this type in an alias"),
+)
 
 _IMPACT_NOTE = (
     "direct: the index records this dependency. "

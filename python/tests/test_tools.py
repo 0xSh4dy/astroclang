@@ -436,6 +436,56 @@ class TestImpact(ToolCase):
             for entry in out.get(bucket, []):
                 self.assertTrue(entry.get("reason"), entry)
 
+    def test_indirect_reaches_the_caller_of_a_caller(self):
+        # The frontier used to be read back off the direct entries, from a
+        # field those queries never asked for.  It was therefore always empty,
+        # and this bucket was empty with it - which reads exactly like a symbol
+        # that genuinely has no indirect callers, so nothing failed.
+        self._chain()
+        out = self.call("get_impact_analysis", symbol="deep_c", depth=3)
+        self.assertEqual([e["symbol"] for e in out["direct"]], ["deep_b"])
+        self.assertEqual([e["symbol"] for e in out["indirect"]], ["deep_a"])
+        self.assertEqual(out["indirect"][0]["hops"], 2)
+        # The USR is how the traversal walks; it is not something a reader
+        # needs, and every entry already carries a resolvable location.
+        for bucket in ("direct", "indirect", "possible"):
+            for entry in out[bucket]:
+                self.assertNotIn("usr", entry)
+
+    def test_a_type_is_reached_through_what_names_it(self):
+        # A class has no callers.  Before type edges were walked here, asking
+        # about a class returned three empty buckets for every class in the
+        # project, whatever its documentation said.
+        self._chain()
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "named.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "named.cpp"), False)],
+            symbols=[sym("c:@S@Widget", "class", "Widget", "Widget", file=0,
+                         line=60),
+                     sym("c:@F@holds", "function", "holds", "holds",
+                         "(Widget &)", file=0, line=61)],
+            edges=[edge("param_type", "c:@F@holds", "c:@S@Widget",
+                        file=0, line=61)],
+        ))
+        self.store.rebuild_symbols()
+        out = self.call("get_impact_analysis", symbol="Widget")
+        self.assertEqual([e["symbol"] for e in out["direct"]], ["holds"])
+        self.assertEqual(out["direct"][0]["reason"],
+                         "takes this type as a parameter")
+
+    def _chain(self):
+        """deep_a calls deep_b calls deep_c, in one translation unit."""
+        names = ("deep_a", "deep_b", "deep_c")
+        self.store.ingest(TranslationUnit(
+            path=str(self.root / "src" / "chain.cpp"), complete=True,
+            files=[FileFact(0, str(self.root / "src" / "chain.cpp"), False)],
+            symbols=[sym(f"c:@F@{n}", "function", n, n, "()", file=0,
+                         line=40 + i) for i, n in enumerate(names)],
+            edges=[edge("calls", "c:@F@deep_b", "c:@F@deep_c", file=0, line=41),
+                   edge("calls", "c:@F@deep_a", "c:@F@deep_b", file=0, line=40)],
+        ))
+        self.store.rebuild_symbols()
+
     def test_the_answer_explains_what_the_buckets_mean(self):
         out = self.call("get_impact_analysis", symbol="mem::Allocator::size")
         self.assertIn("direct", out["note"])
