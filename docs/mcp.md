@@ -398,20 +398,23 @@ at, and never reads a file.
 Three degrees, and they are not equally certain.
 
 ```json
-{"symbol": "geo::Circle::area", "depth": 3, "limit": 10}
+{"symbol": "geo::Registry::Entry::weight", "depth": 3, "limit": 10}
 ```
 ```json
 {
- "symbol": "geo::Circle::area",
- "location": "include/shapes.h:39",
+ "symbol": "geo::Registry::Entry::weight",
+ "location": "include/shapes.h:104",
  "direct": [
-  {"symbol": "app::measure_circle", "location": "src/usage.cpp:32",
-   "dispatch": "virtual", "call_site": "src/usage.cpp:32", "reason": "calls this symbol"},
-  {"symbol": "geo::Tagged::area", "location": "src/shapes.cpp:31",
-   "reason": "calls this symbol"}
+  {"symbol": "app::entry_weight", "signature": "(const geo::Registry::Entry &)",
+   "location": "src/usage.cpp:82", "call_site": "src/usage.cpp:82",
+   "reason": "calls this symbol"},
+  {"symbol": "geo::Registry::operator+=", "signature": "(const Entry &)",
+   "location": "include/shapes.h:112", "defined_at": "src/shapes.cpp:51",
+   "call_site": "src/shapes.cpp:52", "reason": "calls this symbol"}
  ],
  "indirect": [
-  {"symbol": "app::main", "location": "src/usage.cpp:80",
+  {"symbol": "app::add_entry", "signature": "(geo::Registry &, int)",
+   "location": "src/usage.cpp:89", "call_site": "src/usage.cpp:90",
    "reason": "calls a caller of this symbol (2 hops)", "hops": 2}
  ],
  "possible": [],
@@ -421,11 +424,18 @@ Three degrees, and they are not equally certain.
 
 | Degree | Means |
 | --- | --- |
-| `direct` | the index records this dependency — a resolved call, an override, a type relationship |
+| `direct` | the index records this dependency — a resolved call, a class that derives from this type, or a declaration that names this type as a parameter, return type, field, variable or alias |
 | `indirect` | reached through the callers of the direct entries, within `depth` hops; the effect is real but not at the first hop |
-| `possible` | holds only if run-time dispatch reaches here: a virtual call, a function pointer, or a template instantiation |
+| `possible` | holds only if run-time dispatch reaches here: an override, a class that inherits from this type, a call through a function pointer, or a template instantiation |
 
-Every entry carries `reason`. Nothing in `possible` is claimed as affected.
+Every entry carries `reason`, and the reason says which of these it is, because
+"calls this symbol" and "takes this type as a parameter" call for different
+reactions from a reviewer. Nothing in `possible` is claimed as affected.
+
+A type has no callers, so asking about a class reaches the program through the
+declarations that name it. That is the difference between an impact query that
+answers "nothing is affected" for every class in the project and one that
+answers the question:
 
 ### `get_changed_symbols`
 
