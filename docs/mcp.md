@@ -240,8 +240,12 @@ a field has no `defined_at`, because a field is only ever declared.
  "defined_at": "src/shapes.cpp:19",
  "kind": "method",
  "callers": [
-  {"symbol": "app::measure_circle", "signature": "(const geo::Circle &)", "kind": "function",
-   "location": "src/usage.cpp:32", "dispatch": "virtual", "call_site": "src/usage.cpp:32"},
+  {"symbol": "app::measure_base_explicitly", "signature": "(const geo::Tagged &)",
+   "kind": "function", "location": "src/usage.cpp:39",
+   "dispatch": "virtual", "call_site": "src/usage.cpp:40"},
+  {"symbol": "app::measure_circle", "signature": "(const geo::Circle &)",
+   "kind": "function", "location": "src/usage.cpp:32",
+   "dispatch": "virtual", "call_site": "src/usage.cpp:32"},
   {"symbol": "geo::Tagged::area", "signature": "() const", "kind": "method",
    "location": "include/shapes.h:63", "defined_at": "src/shapes.cpp:31",
    "dispatch": "virtual", "call_site": "src/shapes.cpp:31"}
