@@ -125,6 +125,16 @@ Edges by kind:
 | overrides | 14 088 | | aliases | 2 |
 | inherits | 9 911 | | | |
 
+**These edge counts predate the type-edge fix** and undercount every type
+relationship. `field_type` and `returns` do not appear at all, and `param_type`
+at 119 and `aliases` at 2 are the few that slipped through rather than a
+measure of how many exist — the signature of a guard that rejected the
+unwrapping step before it reached the declaration, which is what `3ffa9b6`
+corrected. The symbol counts and the database size are unaffected; the edge
+totals and the shares in §6 are not, and a re-run would move them. They are
+left as measured rather than adjusted by guess, marked here so the §6
+percentages are not read as describing the current extractor.
+
 ---
 
 ## 4. Scaling, and the bottleneck that matters

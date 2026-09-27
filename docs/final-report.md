@@ -263,7 +263,7 @@ named, because an empty answer would otherwise read as "nothing changed".
 
 ## 8. Tests
 
-**319 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
+**328 tests**, run with `python -m pytest tests/ -q`. The semantic ones drive
 the real extractor against a small adversarial corpus and assert on
 **resolution**, not on whether syntax nodes exist — which is the only kind of
 assertion that distinguishes this tool from a parser.
@@ -327,6 +327,13 @@ a project file, 19.0% on a stub, 4.2% on a synthetic TU-local identity. For
 **call** edges alone — the ones an agent follows to understand behaviour —
 **45.8% resolve to a body the index holds**. That is the honest headline and it
 is lower than the others because calls are what leave the project.
+
+One caveat on these: they were measured before the type-edge fix, which
+restored `field_type`, `returns` and the rest, so the denominator is smaller
+than a current run would produce. The *call* percentage — the number that
+matters for an agent following behaviour — is unaffected, because calls were
+never the edges that were missing. [`evaluation.md`](evaluation.md) §3 marks
+which figures moved and which did not.
 
 **Incremental.** 12.5× on a one-file change (§7).
 
